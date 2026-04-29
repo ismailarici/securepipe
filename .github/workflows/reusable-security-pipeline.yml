@@ -45,6 +45,11 @@ on:
         required: false
         type: string
         default: "sarif"
+      defectdojo-url:
+        description: "Base URL of your DefectDojo instance (e.g. https://defectdojo.example.com). When set, all findings are imported into DefectDojo after scanning."
+        required: false
+        type: string
+        default: ""
     secrets:
       AWS_ACCOUNT_ID:
         required: false
@@ -61,6 +66,8 @@ on:
       GCP_SERVICE_ACCOUNT:
         required: false
       SEMGREP_APP_TOKEN:
+        required: false
+      DEFECTDOJO_TOKEN:
         required: false
 
 jobs:
@@ -119,6 +126,14 @@ jobs:
           path: bandit-results.sarif
           retention-days: 30
 
+      - name: Upload Bandit SARIF for DefectDojo
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.defectdojo-url != ''
+        with:
+          name: dd-bandit-sarif
+          path: bandit-results.sarif
+          retention-days: 1
+
   semgrep-scan:
     name: Semgrep SAST
     runs-on: ubuntu-latest
@@ -156,6 +171,14 @@ jobs:
           name: semgrep-sarif
           path: semgrep.sarif
           retention-days: 30
+
+      - name: Upload Semgrep SARIF for DefectDojo
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.defectdojo-url != ''
+        with:
+          name: dd-semgrep-sarif
+          path: semgrep.sarif
+          retention-days: 1
 
   pip-audit-scan:
     name: pip-audit Dependency Scan
@@ -200,6 +223,14 @@ jobs:
           path: pip-audit-results.sarif
           retention-days: 30
 
+      - name: Upload Pip Audit SARIF for DefectDojo
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.defectdojo-url != ''
+        with:
+          name: dd-pip-audit-sarif
+          path: pip-audit-results.sarif
+          retention-days: 1
+
   npm-audit-scan:
     name: npm-audit Dependency Scan
     runs-on: ubuntu-latest
@@ -240,6 +271,14 @@ jobs:
           name: npm-audit-sarif
           path: npm-audit-results.sarif
           retention-days: 30
+
+      - name: Upload Npm Audit SARIF for DefectDojo
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.defectdojo-url != ''
+        with:
+          name: dd-npm-audit-sarif
+          path: npm-audit-results.sarif
+          retention-days: 1
 
   build-and-sbom:
     name: Build Image and Generate SBOM
@@ -390,6 +429,14 @@ jobs:
           path: trivy-results.sarif
           retention-days: 30
 
+      - name: Upload Trivy SARIF for DefectDojo
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.defectdojo-url != ''
+        with:
+          name: dd-trivy-sarif
+          path: trivy-results.sarif
+          retention-days: 1
+
   checkov-scan:
     name: Checkov IaC Scan
     runs-on: ubuntu-latest
@@ -421,6 +468,14 @@ jobs:
           name: checkov-sarif
           path: checkov-results.sarif
           retention-days: 30
+
+      - name: Upload Checkov SARIF for DefectDojo
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.defectdojo-url != ''
+        with:
+          name: dd-checkov-sarif
+          path: checkov-results.sarif
+          retention-days: 1
 
   zap-scan:
     name: OWASP ZAP DAST Scan
@@ -497,6 +552,119 @@ jobs:
           path: zap-results.sarif
           retention-days: 30
 
+      - name: Upload Zap SARIF for DefectDojo
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.defectdojo-url != ''
+        with:
+          name: dd-zap-sarif
+          path: zap-results.sarif
+          retention-days: 1
+
+  defectdojo-import:
+    name: DefectDojo Import
+    runs-on: ubuntu-latest
+    if: always() && inputs.defectdojo-url != ''
+    needs:
+      - secrets-scan
+      - bandit-scan
+      - semgrep-scan
+      - pip-audit-scan
+      - npm-audit-scan
+      - build-and-sbom
+      - trivy-scan
+      - checkov-scan
+      - zap-scan
+    steps:
+      - name: Download SARIF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dd-*-sarif
+          path: sarifs/
+          merge-multiple: true
+
+      - name: Import findings into DefectDojo
+        env:
+          DD_URL: ${{ inputs.defectdojo-url }}
+          DD_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          pip install requests -q
+          python3 << 'SCRIPT'
+          import os, json, glob, sys
+          import requests
+
+          dd_url  = os.environ["DD_URL"].rstrip("/")
+          token   = os.environ["DD_TOKEN"]
+          repo    = os.environ["REPO"]
+          sha     = os.environ["SHA"]
+          product_name = repo.split("/")[-1]
+
+          headers = {"Authorization": f"Token {token}"}
+
+          def api(method, path, **kwargs):
+              r = requests.request(method, f"{dd_url}/api/v2{path}", headers=headers, **kwargs)
+              if not r.ok:
+                  print(f"  ERROR {method} {path}: {r.status_code} {r.text[:200]}")
+                  sys.exit(1)
+              return r.json()
+
+          # Find or create product
+          resp = api("GET", f"/products/?name={product_name}&limit=1")
+          if resp["count"] > 0:
+              product_id = resp["results"][0]["id"]
+              print(f"Found product: {product_name} (id={product_id})")
+          else:
+              result = api("POST", "/products/", json={
+                  "name": product_name,
+                  "description": f"Imported by SecurePipe from {repo}",
+                  "prod_type": 1,
+              })
+              product_id = result["id"]
+              print(f"Created product: {product_name} (id={product_id})")
+
+          from datetime import date
+          today = date.today().isoformat()
+
+          # Create engagement for this run
+          eng = api("POST", "/engagements/", json={
+              "name": f"SecurePipe {sha[:8]}",
+              "product": product_id,
+              "target_start": today,
+              "target_end": today,
+              "engagement_type": "CI/CD",
+              "status": "In Progress",
+              "build_id": sha,
+              "commit_hash": sha,
+              "branch_tag": os.environ.get("GITHUB_REF_NAME", ""),
+          })
+          engagement_id = eng["id"]
+          print(f"Created engagement: {eng['name']} (id={engagement_id})")
+
+          # Import each SARIF file
+          sarif_files = glob.glob("sarifs/*.sarif")
+          if not sarif_files:
+              print("No SARIF files found — skipping import")
+              sys.exit(0)
+
+          for sarif_path in sorted(sarif_files):
+              tool_name = os.path.basename(sarif_path).replace("-results", "").replace(".sarif", "")
+              print(f"  Importing {sarif_path} (tool: {tool_name})...")
+              with open(sarif_path, "rb") as f:
+                  api("POST", "/import-scan/", data={
+                      "scan_type": "SARIF",
+                      "engagement": engagement_id,
+                      "active": "true",
+                      "verified": "false",
+                      "close_old_findings": "true",
+                      "minimum_severity": "Info",
+                  }, files={"file": (os.path.basename(sarif_path), f, "application/json")})
+              print(f"    done")
+
+          print(f"Import complete. View at {dd_url}/engagements/{engagement_id}/")
+          SCRIPT
+
+
   pipeline-summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
@@ -511,6 +679,7 @@ jobs:
       - trivy-scan
       - checkov-scan
       - zap-scan
+      - defectdojo-import
     steps:
       - name: Print summary
         run: |
@@ -526,5 +695,6 @@ jobs:
           echo "| Trivy Container Scan | ${{ needs.trivy-scan.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Checkov IaC Scan | ${{ needs.checkov-scan.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| OWASP ZAP DAST | ${{ needs.zap-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DefectDojo Import | ${{ needs.defectdojo-import.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Cloud: \`${{ inputs.cloud-provider }}\` | Reporting: \`${{ inputs.reporting-mode }}\`" >> $GITHUB_STEP_SUMMARY
