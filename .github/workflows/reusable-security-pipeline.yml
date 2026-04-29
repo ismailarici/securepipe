@@ -26,6 +26,16 @@ on:
         required: false
         type: string
         default: "us-east-1"
+      cloud-provider:
+        description: "Cloud provider for image registry (aws, azure, gcp)"
+        required: false
+        type: string
+        default: "aws"
+      reporting-mode:
+        description: "sarif uploads findings to the GitHub Security tab; artifacts uploads SARIF files as downloadable run artifacts (use for private repos without GHAS)"
+        required: false
+        type: string
+        default: "sarif"
     secrets:
       AWS_ACCOUNT_ID:
         required: true
@@ -75,11 +85,20 @@ jobs:
             -o bandit-results.sarif \
             || true
 
-      - name: Upload Bandit SARIF
+      - name: Upload Bandit SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
+        if: always() && inputs.reporting-mode == 'sarif'
         with:
           sarif_file: bandit-results.sarif
           category: bandit
+
+      - name: Upload Bandit SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.reporting-mode == 'artifacts'
+        with:
+          name: bandit-sarif
+          path: bandit-results.sarif
+          retention-days: 30
 
   semgrep-scan:
     name: Semgrep SAST
@@ -103,12 +122,21 @@ jobs:
             --sarif \
             --output semgrep.sarif \
             || true
-      - name: Upload Semgrep SARIF
+
+      - name: Upload Semgrep SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && inputs.reporting-mode == 'sarif'
         with:
           sarif_file: semgrep.sarif
           category: semgrep
+
+      - name: Upload Semgrep SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.reporting-mode == 'artifacts'
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          retention-days: 30
 
   pip-audit-scan:
     name: pip-audit Dependency Scan
@@ -135,15 +163,23 @@ jobs:
             -o pip-audit-results.json \
             || true
 
-      - name: Convert pip-audit to SARIF
+      - name: Convert pip-audit JSON to SARIF
         run: python3 -c "import json; data=json.load(open('pip-audit-results.json')); results=[{'ruleId':v.get('id','UNKNOWN'),'message':{'text':v.get('description','')},'locations':[{'physicalLocation':{'artifactLocation':{'uri':'app/requirements.txt'}}}]} for d in data.get('dependencies',[]) for v in d.get('vulns',[])]; json.dump({'version':'2.1.0','runs':[{'tool':{'driver':{'name':'pip-audit','rules':[]}},'results':results}]},open('pip-audit-results.sarif','w')); print(len(results),'findings')"
 
-      - name: Upload pip-audit SARIF
+      - name: Upload pip-audit SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
+        if: always() && inputs.reporting-mode == 'sarif'
         with:
           sarif_file: pip-audit-results.sarif
           category: pip-audit
 
+      - name: Upload pip-audit SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.reporting-mode == 'artifacts'
+        with:
+          name: pip-audit-sarif
+          path: pip-audit-results.sarif
+          retention-days: 30
 
   npm-audit-scan:
     name: npm-audit Dependency Scan
@@ -166,15 +202,26 @@ jobs:
         run: |
           npm audit --json --prefix app > npm-audit-results.json || true
 
-      - name: Convert npm-audit to SARIF
+      - name: Convert npm-audit JSON to SARIF
         run: |
           echo 'aW1wb3J0IGpzb24KdHJ5OgogICAgZGF0YSA9IGpzb24ubG9hZChvcGVuKCJucG0tYXVkaXQtcmVzdWx0cy5qc29uIikpCiAgICB2dWxucyA9IGRhdGEuZ2V0KCJ2dWxuZXJhYmlsaXRpZXMiLCB7fSkKICAgIHJlc3VsdHMgPSBbXQogICAgZm9yIG5hbWUsIGluZm8gaW4gdnVsbnMuaXRlbXMoKToKICAgICAgICBzZXZlcml0eSA9IGluZm8uZ2V0KCJzZXZlcml0eSIsICJsb3ciKQogICAgICAgIHZpYSA9IGluZm8uZ2V0KCJ2aWEiLCBbXSkKICAgICAgICBkZXNjID0gdmlhWzBdLmdldCgidGl0bGUiLCBuYW1lKSBpZiB2aWEgYW5kIGlzaW5zdGFuY2UodmlhWzBdLCBkaWN0KSBlbHNlIG5hbWUKICAgICAgICByZXN1bHRzLmFwcGVuZCh7InJ1bGVJZCI6IG5hbWUsICJtZXNzYWdlIjogeyJ0ZXh0IjogZGVzYyArICIgKHNldmVyaXR5OiAiICsgc2V2ZXJpdHkgKyAiKSJ9LCAibG9jYXRpb25zIjogW3sicGh5c2ljYWxMb2NhdGlvbiI6IHsiYXJ0aWZhY3RMb2NhdGlvbiI6IHsidXJpIjogImFwcC9wYWNrYWdlLmpzb24ifX19XX0pCmV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgIHByaW50KCJDb252ZXJzaW9uIGVycm9yOiIsIGUpCiAgICByZXN1bHRzID0gW10Kc2FyaWYgPSB7InZlcnNpb24iOiAiMi4xLjAiLCAicnVucyI6IFt7InRvb2wiOiB7ImRyaXZlciI6IHsibmFtZSI6ICJucG0tYXVkaXQiLCAicnVsZXMiOiBbXX19LCAicmVzdWx0cyI6IHJlc3VsdHN9XX0KanNvbi5kdW1wKHNhcmlmLCBvcGVuKCJucG0tYXVkaXQtcmVzdWx0cy5zYXJpZiIsICJ3IikpCnByaW50KGxlbihyZXN1bHRzKSwgImZpbmRpbmdzIikK' | base64 -d > /tmp/npm_to_sarif.py
           python3 /tmp/npm_to_sarif.py
-      - name: Upload npm-audit SARIF
+
+      - name: Upload npm-audit SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
+        if: always() && inputs.reporting-mode == 'sarif'
         with:
           sarif_file: npm-audit-results.sarif
           category: npm-audit
+
+      - name: Upload npm-audit SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.reporting-mode == 'artifacts'
+        with:
+          name: npm-audit-sarif
+          path: npm-audit-results.sarif
+          retention-days: 30
+
   build-and-sbom:
     name: Build Image and Generate SBOM
     runs-on: ubuntu-latest
@@ -252,12 +299,20 @@ jobs:
           exit-code: "0"
           ignore-unfixed: true
 
-      - name: Upload Trivy SARIF
+      - name: Upload Trivy SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && inputs.reporting-mode == 'sarif'
         with:
           sarif_file: trivy-results.sarif
           category: trivy
+
+      - name: Upload Trivy SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.reporting-mode == 'artifacts'
+        with:
+          name: trivy-sarif
+          path: trivy-results.sarif
+          retention-days: 30
 
   checkov-scan:
     name: Checkov IaC Scan
@@ -276,12 +331,20 @@ jobs:
           output_file_path: checkov-results.sarif
           soft_fail: true
 
-      - name: Upload Checkov SARIF
+      - name: Upload Checkov SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && inputs.reporting-mode == 'sarif'
         with:
           sarif_file: checkov-results.sarif
           category: checkov
+
+      - name: Upload Checkov SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.reporting-mode == 'artifacts'
+        with:
+          name: checkov-sarif
+          path: checkov-results.sarif
+          retention-days: 30
 
   zap-scan:
     name: OWASP ZAP DAST Scan
@@ -343,12 +406,20 @@ jobs:
             echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"ZAP","rules":[]}},"results":[]}]}' > zap-results.sarif
           fi
 
-      - name: Upload ZAP SARIF
+      - name: Upload ZAP SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && inputs.reporting-mode == 'sarif'
         with:
           sarif_file: zap-results.sarif
           category: zap
+
+      - name: Upload ZAP SARIF as artifact
+        uses: actions/upload-artifact@v4
+        if: always() && inputs.reporting-mode == 'artifacts'
+        with:
+          name: zap-sarif
+          path: zap-results.sarif
+          retention-days: 30
 
   pipeline-summary:
     name: Pipeline Summary
@@ -379,3 +450,5 @@ jobs:
           echo "| Trivy Container Scan | ${{ needs.trivy-scan.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Checkov IaC Scan | ${{ needs.checkov-scan.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| OWASP ZAP DAST | ${{ needs.zap-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Reporting mode: \`${{ inputs.reporting-mode }}\`" >> $GITHUB_STEP_SUMMARY
