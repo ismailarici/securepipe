@@ -283,3 +283,162 @@ Open an issue at github.com/ismailarici/securepipe with:
 - Your app language
 - The failing job name
 - The error message from the job logs
+
+---
+
+## Azure setup
+
+Use this section if `cloud-provider: azure` is set in your caller workflow.
+
+### Prerequisites
+
+- An Azure subscription
+- Azure CLI installed locally (`az`)
+- An Azure Container Registry (ACR) instance
+
+### Step 1 — Create an ACR repository
+
+```bash
+az acr create \
+  --resource-group your-resource-group \
+  --name yourregistryname \
+  --sku Basic
+```
+
+Note the login server — it will be `yourregistryname.azurecr.io`. This is your `registry-url` input.
+
+### Step 2 — Register a GitHub app registration for OIDC
+
+```bash
+# Create the app registration
+az ad app create --display-name "securepipe-your-app-repo"
+
+# Note the appId from the output — this is your AZURE_CLIENT_ID
+APP_ID=<appId from above>
+
+# Create a service principal for the app registration
+az ad sp create --id $APP_ID
+
+# Assign AcrPush role scoped to your registry
+az role assignment create \
+  --assignee $APP_ID \
+  --role AcrPush \
+  --scope $(az acr show --name yourregistryname --query id -o tsv)
+```
+
+### Step 3 — Add federated credentials (OIDC)
+
+```bash
+az ad app federated-credential create \
+  --id $APP_ID \
+  --parameters '{
+    "name": "github-actions",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject": "repo:YOUR_ORG/YOUR_REPO:ref:refs/heads/main",
+    "audiences": ["api://AzureADTokenExchange"]
+  }'
+```
+
+Replace `YOUR_ORG/YOUR_REPO` with your actual values. Add a second federated credential with `subject` set to `repo:YOUR_ORG/YOUR_REPO:pull_request` if you want the pipeline to run on PRs.
+
+### Step 4 — Add secrets to your app repo
+
+| Secret | Value |
+|--------|-------|
+| `AZURE_CLIENT_ID` | App registration client ID (`appId`) |
+| `AZURE_TENANT_ID` | `az account show --query tenantId -o tsv` |
+| `AZURE_SUBSCRIPTION_ID` | `az account show --query id -o tsv` |
+
+### Step 5 — Update your caller workflow
+
+```yaml
+    with:
+      cloud-provider: azure
+      registry-url: yourregistryname.azurecr.io
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+```
+
+---
+
+## GCP setup
+
+Use this section if `cloud-provider: gcp` is set in your caller workflow.
+
+### Prerequisites
+
+- A GCP project with billing enabled
+- `gcloud` CLI installed locally
+- Google Artifact Registry API enabled: `gcloud services enable artifactregistry.googleapis.com`
+
+### Step 1 — Create a GAR repository
+
+```bash
+gcloud artifacts repositories create your-repo-name \
+  --repository-format=docker \
+  --location=us-central1 \
+  --project=your-project-id
+```
+
+Your `registry-url` input will be `us-central1-docker.pkg.dev/your-project-id/your-repo-name`.
+
+### Step 2 — Create a service account
+
+```bash
+gcloud iam service-accounts create securepipe-runner \
+  --display-name "SecurePipe GitHub Actions" \
+  --project your-project-id
+
+# Grant Artifact Registry write access
+gcloud artifacts repositories add-iam-policy-binding your-repo-name \
+  --location=us-central1 \
+  --member="serviceAccount:securepipe-runner@your-project-id.iam.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer" \
+  --project=your-project-id
+```
+
+### Step 3 — Configure Workload Identity Federation
+
+```bash
+# Create the pool
+gcloud iam workload-identity-pools create "github-pool" \
+  --location="global" \
+  --project=your-project-id
+
+# Create the provider
+gcloud iam workload-identity-pools providers create-oidc "github-provider" \
+  --location="global" \
+  --workload-identity-pool="github-pool" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --project=your-project-id
+
+# Allow the specific repo to impersonate the service account
+gcloud iam service-accounts add-iam-policy-binding \
+  securepipe-runner@your-project-id.iam.gserviceaccount.com \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/attribute.repository/YOUR_ORG/YOUR_REPO" \
+  --project=your-project-id
+```
+
+Get your project number: `gcloud projects describe your-project-id --format='value(projectNumber)'`
+
+### Step 4 — Add secrets to your app repo
+
+| Secret | Value |
+|--------|-------|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
+| `GCP_SERVICE_ACCOUNT` | `securepipe-runner@your-project-id.iam.gserviceaccount.com` |
+
+### Step 5 — Update your caller workflow
+
+```yaml
+    with:
+      cloud-provider: gcp
+      registry-url: us-central1-docker.pkg.dev/your-project-id/your-repo-name
+    secrets:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+```
