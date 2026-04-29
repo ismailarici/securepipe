@@ -1,67 +1,119 @@
-# securepipe
+# SecurePipe
 
-A reusable, language-configurable security pipeline for GitHub Actions. Connect any app in under 5 minutes and get a full 9-stage security scan automatically — secrets detection, SAST, dependency scanning, container scanning, IaC scanning, SBOM generation, and DAST.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Latest tag](https://img.shields.io/github/v/tag/ismailarici/securepipe)](https://github.com/ismailarici/securepipe/tags)
+[![Example pipeline](https://github.com/ismailarici/secureapp-v2/actions/workflows/pipeline.yml/badge.svg)](https://github.com/ismailarici/secureapp-v2/actions/workflows/pipeline.yml)
+
+A reusable GitHub Actions security pipeline. One caller file in your app repo triggers a full
+10-stage scan — secrets, SAST, dependency CVEs, container vulnerabilities, IaC misconfigurations,
+SBOM generation, and DAST. All findings land in the GitHub Security tab or your DefectDojo instance.
 
 ---
 
-## What it does
+## Who is this for
 
-Every time your app pushes to main or opens a pull request, this pipeline runs automatically:
+Teams that want serious security coverage without maintaining pipeline code in every repo.
 
-| Stage                       | Tool         | What it catches                                                             |
-| --------------------------- | ------------ | --------------------------------------------------------------------------- |
-| Secrets scanning            | TruffleHog   | Live credentials in code and git history                                    |
-| Python SAST                 | Bandit       | Python-specific security antipatterns                                       |
-| Multi-language SAST         | Semgrep      | OWASP Top 10, injection, misconfigurations, custom rules                    |
-| Python dependency scanning  | pip-audit    | Known CVEs in Python dependencies                                           |
-| Node.js dependency scanning | npm-audit    | Known CVEs in npm packages                                                  |
-| SBOM generation             | Syft         | Full inventory of every component in your container                         |
-| Container scanning          | Trivy        | OS and library vulnerabilities in your Docker image                         |
-| IaC scanning                | Checkov      | Terraform and Dockerfile misconfigurations                                  |
-| DAST                        | OWASP ZAP    | Runtime vulnerabilities — injection, missing headers, broken access control |
-| Reporting                   | GitHub SARIF | All findings in the GitHub Security tab                                     |
+SecurePipe is a single reusable workflow. Your app repos contain one caller file (~20 lines) that
+references it. When you need to update a scanner, change a rule, or fix a step, you do it once
+here and every connected repo picks it up automatically.
 
-All findings appear in your repository's Security tab. No external dashboard required.
+It works for:
+
+- **Small teams** shipping fast who want automated scanning without a dedicated security engineer
+- **Platform engineers** who want a standard security baseline rolled out across all app repos in an org
+- **Solo developers** who want the same tooling a well-staffed security team would use
+
+It is not for teams that already have a commercial SAST/SCA product they are happy with. If you
+have Snyk or Semgrep Pro and it is working, stay with it. SecurePipe is for teams that want
+solid open source coverage wired up correctly.
+
+---
+
+## What it runs
+
+| Stage | Tool | Catches |
+|-------|------|---------|
+| Secrets gate | TruffleHog | Live credentials in code and full git history |
+| Python SAST | Bandit | Python-specific security antipatterns |
+| Multi-language SAST | Semgrep | OWASP Top 10, injection, misconfigs, custom rules |
+| Python dependencies | pip-audit | CVEs in Python packages |
+| Node.js dependencies | npm-audit | CVEs in npm packages |
+| IaC | Checkov | Terraform and Dockerfile misconfigurations |
+| Image build + SBOM | Syft | Full software bill of materials in SPDX format |
+| Container scan | Trivy | OS and library CVEs in your Docker image |
+| DAST | OWASP ZAP | Runtime issues — injection, missing headers, broken access control |
+| Findings import | DefectDojo | Persistent finding management across all repos (optional) |
+
+TruffleHog runs first and blocks everything else if it finds a live credential. Trivy is the
+hard severity gate — it fails the build at your configured threshold. Everything else reports
+findings without blocking, so a noisy first scan does not break your CI.
 
 ---
 
 ## How to connect your app
 
-### Prerequisites
+### Quickstart (30 minutes)
 
-- Your app has a `Dockerfile` at `app/Dockerfile`
-- Your app has a `requirements.txt` at `app/requirements.txt` (Python apps) or `package.json` at `app/package.json` (Node.js apps)
-- You have an AWS account with an ECR repository and an IAM role configured for GitHub Actions OIDC
+Run the setup script to generate a pre-filled caller workflow and the exact secrets you need to add:
 
-### Step 1 — Add secrets to your app repo
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ismailarici/securepipe/main/setup.sh) \
+  --org your-org \
+  --repo your-app-repo \
+  --language python
+```
 
-Go to your app repo → Settings → Secrets and variables → Actions and add:
+Or clone this repo and run it locally:
 
-| Secret           | Value                               |
-| ---------------- | ----------------------------------- |
-| `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID        |
-| `AWS_ROLE_ARN`   | ARN of your GitHub Actions IAM role |
+```bash
+git clone https://github.com/ismailarici/securepipe.git
+cd securepipe
+bash setup.sh --org your-org --repo your-app-repo --language python
+```
 
-### Step 2 — Create the caller workflow
+For a full walkthrough including AWS OIDC setup and troubleshooting, see [docs/onboarding.md](docs/onboarding.md).
 
-Create `.github/workflows/pipeline.yml` in your app repo with the following content:
+### Manual setup
+
+**Step 1 — Provision AWS infrastructure (skip if you already have ECR + OIDC role)**
+
+```bash
+cd terraform/
+terraform init
+terraform apply -var="github_org=your-org" -var="github_repo=your-app-repo"
+```
+
+This creates an ECR repository, a GitHub Actions OIDC provider, and a scoped IAM role.
+Copy the `role_arn` and `aws_account_id` outputs — you need them as secrets.
+
+**Step 2 — Add secrets to your app repo**
+
+Settings → Secrets and variables → Actions:
+
+| Secret | Value |
+|--------|-------|
+| `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID |
+| `AWS_ROLE_ARN` | `arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME` |
+
+**Step 3 — Create the caller workflow**
+
+Create `.github/workflows/pipeline.yml` in your app repo:
 
 ```yaml
 name: Security Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   security-pipeline:
     name: Run Security Pipeline
-    uses: ismailarici/securepipe/.github/workflows/reusable-security-pipeline.yml@v1.0.0
+    uses: ismailarici/securepipe/.github/workflows/reusable-security-pipeline.yml@main
     with:
       app-language: python
       image-name: your-app-name
@@ -73,137 +125,231 @@ jobs:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 ```
 
-### Step 3 — Push and watch it run
+**Step 4 — Enable Actions write permissions**
 
-Push the file to your repo. Go to the Actions tab and watch the pipeline run.
+Settings → Actions → General → Workflow permissions → Read and write permissions.
 
-That's it.
-
----
-
-## Configuration inputs
-
-| Input           | Required | Default     | Description                                                        |
-| --------------- | -------- | ----------- | ------------------------------------------------------------------ |
-| `app-language`  | Yes      | —           | Programming language (`python`, `node`, `java`)                    |
-| `image-name`    | Yes      | —           | Docker image name to build and scan                                |
-| `app-port`      | No       | `5000`      | Port your app exposes                                              |
-| `fail-severity` | No       | `HIGH`      | Trivy severity that fails the build (`CRITICAL`, `HIGH`, `MEDIUM`) |
-| `aws-region`    | No       | `us-east-1` | AWS region for ECR                                                 |
+Push the file and watch the Actions tab.
 
 ---
 
-## Pipeline architecture
+## Configuration
 
-The pipeline uses the GitHub Actions reusable workflow pattern. Your app repo contains a single caller file that references this pipeline repo. All security logic lives here — your app repo has no pipeline code at all.
+### Inputs
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `app-language` | Yes | — | `python`, `node`, or `java` |
+| `image-name` | Yes | — | Docker image name (matches your ECR repo name) |
+| `app-port` | No | `5000` | Port your app exposes |
+| `fail-severity` | No | `HIGH` | Trivy severity that fails the build (`CRITICAL`, `HIGH`, `MEDIUM`) |
+| `aws-region` | No | `us-east-1` | AWS region for ECR |
+| `cloud-provider` | No | `aws` | Registry provider: `aws`, `azure`, or `gcp` |
+| `registry-url` | No | `""` | Registry hostname for Azure/GCP (AWS is derived automatically) |
+| `reporting-mode` | No | `sarif` | `sarif` uploads to GitHub Security tab; `artifacts` uploads SARIF as downloadable files (for private repos without GHAS) |
+| `defectdojo-url` | No | `""` | Base URL of your DefectDojo instance. When set, all findings are imported after scanning. |
+
+### Secrets
+
+| Secret | When required |
+|--------|--------------|
+| `AWS_ACCOUNT_ID` | `cloud-provider: aws` |
+| `AWS_ROLE_ARN` | `cloud-provider: aws` |
+| `AZURE_CLIENT_ID` | `cloud-provider: azure` |
+| `AZURE_TENANT_ID` | `cloud-provider: azure` |
+| `AZURE_SUBSCRIPTION_ID` | `cloud-provider: azure` |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `cloud-provider: gcp` |
+| `GCP_SERVICE_ACCOUNT` | `cloud-provider: gcp` |
+| `DEFECTDOJO_TOKEN` | `defectdojo-url` is set |
+| `SEMGREP_APP_TOKEN` | Optional — enables Semgrep cloud features |
+
+---
+
+## Multi-cloud support
+
+The pipeline pushes your image to the registry of your chosen cloud provider. All three use
+short-lived OIDC credentials — no long-lived keys stored anywhere.
+
+| Provider | Registry | Auth |
+|----------|----------|------|
+| AWS (default) | Amazon ECR | OIDC via `aws-actions/configure-aws-credentials` |
+| Azure | Azure Container Registry | Federated credentials via `azure/login` |
+| GCP | Google Artifact Registry | Workload Identity Federation via `google-github-actions/auth` |
+
+For Azure and GCP setup, see [docs/onboarding.md](docs/onboarding.md).
+
+---
+
+## DefectDojo integration
+
+When `defectdojo-url` is set, the pipeline imports all SARIF findings into DefectDojo after
+every run. It creates a product (named after your repo) and a new engagement per run. The
+`close_old_findings` flag means resolved issues are automatically marked mitigated.
+
+```yaml
+    with:
+      defectdojo-url: https://defectdojo.yourdomain.com
+    secrets:
+      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+```
+
+For DefectDojo deployment and setup, see [docs/defect-dojo-setup.md](docs/defect-dojo-setup.md).
+
+---
+
+## Private repo support
+
+GitHub Advanced Security (GHAS) is required to upload SARIF to the Security tab on private
+repos. If your repo is private and you do not have GHAS, set `reporting-mode: artifacts`.
+All SARIF files are uploaded as downloadable run artifacts with 30-day retention instead.
+The pipeline summary table still prints to the Actions run page regardless of mode.
+
+```yaml
+    with:
+      reporting-mode: artifacts
+```
+
+---
+
+## How it compares to commercial tools
+
+| Capability | SecurePipe | Snyk | Semgrep Pro | Wiz |
+|------------|-----------|------|-------------|-----|
+| Secrets scanning | TruffleHog (verified) | Yes | Yes | No |
+| SAST | Bandit + Semgrep OSS | Yes | Yes (more rules) | No |
+| Dependency CVEs | pip-audit / npm-audit | Yes (deeper) | Yes | No |
+| Container scanning | Trivy | Yes | No | Yes |
+| IaC scanning | Checkov | Partial | Yes | Yes |
+| DAST | OWASP ZAP | No | No | No |
+| SBOM | Syft (SPDX) | Yes | No | Partial |
+| Cloud runtime | No | No | No | Yes |
+| Cost | Free | Freemium / paid | Freemium / paid | Paid |
+| Self-hosted | Yes | Partial | Partial | No |
+| Customisable rules | Yes (.semgrep/) | Limited | Yes | Limited |
+
+The short version: SecurePipe covers more of the pipeline than any single commercial tool at
+zero cost. The trade-offs are rule depth (Semgrep Pro has a larger rule set), ecosystem
+integrations (Snyk has tighter package manager support), and cloud runtime visibility (only
+Wiz covers that). If runtime security and deep SCA are your top priorities, evaluate those
+tools on their own merits. For CI pipeline scanning with no per-seat cost, SecurePipe covers
+the full surface area.
+
+---
+
+## Architecture
+
+SecurePipe uses the GitHub Actions `workflow_call` pattern. Your app repo contains one caller
+file. All scanner logic, tool versions, and step definitions live here. You update once and
+every connected repo picks it up.
 
 ```
-App repo (caller)                    Pipeline repo (callee)
-─────────────────                    ──────────────────────
+App repo (caller)                    SecurePipe (callee)
+─────────────────                    ──────────────────────────────────────
 .github/workflows/                   .github/workflows/
-  pipeline.yml          calls →        reusable-security-pipeline.yml
+  pipeline.yml        calls →          reusable-security-pipeline.yml
   │
   └── passes inputs:
-        app-language
-        image-name
-        app-port
-        fail-severity
-        aws-region
+        app-language, image-name
+        app-port, fail-severity
+        aws-region, cloud-provider
+        registry-url, reporting-mode
+        defectdojo-url
 ```
 
-### Job execution order
+**Job execution order:**
 
-TruffleHog runs first as the secrets gate. If a live credential is found, the pipeline stops immediately.
+```
+[TruffleHog] ← secrets gate, blocks all other jobs if it fails
+      │
+      ├── [Bandit]       Python only
+      ├── [Semgrep]      all languages
+      ├── [pip-audit]    Python only
+      ├── [npm-audit]    Node.js only
+      ├── [Checkov]      all languages
+      └── [Build + SBOM] ─── [Trivy]
+                         └── [ZAP]
+                               │
+                         [DefectDojo import]  if defectdojo-url is set
+                               │
+                         [Pipeline summary]
+```
 
-After TruffleHog passes, these jobs run in parallel:
-
-- Bandit (Python only)
-- Semgrep (all languages)
-- pip-audit (Python only)
-- npm-audit (Node.js only)
-- Checkov (all languages)
-- Build image and generate SBOM
-
-After the image is built, Trivy and OWASP ZAP run against it.
-
-Trivy is the hard gate. If it finds a vulnerability at or above your configured severity threshold, the pipeline fails. ZAP findings are reported but do not block the build — DAST results require human triage.
-
-The pipeline summary job runs last and prints a status table of every stage to the Actions run page.
+Image sharing between jobs uses GitHub Actions artifacts. The image built in `build-and-sbom`
+is exported as a tar, uploaded with 1-day retention, and loaded by Trivy and ZAP in their
+own runners.
 
 ---
 
 ## Language support
 
-| Language | TruffleHog | Semgrep | Checkov | Bandit | pip-audit | npm-audit |
-| -------- | ---------- | ------- | ------- | ------ | --------- | --------- |
-| Python   | ✅         | ✅      | ✅      | ✅     | ✅        | —         |
-| Node.js  | ✅         | ✅      | ✅      | —      | —         | ✅        |
-| Java     | ✅         | ✅      | ✅      | —      | —         | —         |
+| | TruffleHog | Semgrep | Checkov | Bandit | pip-audit | npm-audit |
+|-|:---:|:---:|:---:|:---:|:---:|:---:|
+| Python | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Node.js | ✓ | ✓ | ✓ | — | — | ✓ |
+| Java | ✓ | ✓ | ✓ | — | — | — |
 
-Language-specific tools are automatically skipped for non-matching apps. No configuration needed.
+Language-specific jobs are automatically skipped — no configuration needed.
 
 ---
 
 ## Custom Semgrep rules
 
-The `.semgrep/` directory contains custom rules that run alongside the community rule packs:
+Add `.yml` rule files to `.semgrep/` and they run on every scan alongside the community packs.
+Three rules are included by default:
 
-| Rule                       | What it catches                                    |
-| -------------------------- | -------------------------------------------------- |
-| `hardcoded-aws-access-key` | AWS Access Key IDs hardcoded in any language       |
-| `flask-debug-mode-enabled` | Flask apps running with `debug=True` in production |
-| `npm-unsafe-perm`          | Use of `--unsafe-perm` flag in npm scripts         |
-
-To add your own rules, place `.yml` rule files in the `.semgrep/` directory of this repo. They will run automatically on every scan.
-
----
-
-## Viewing findings
-
-All findings are uploaded to the GitHub Security tab in SARIF format.
-
-To view them:
-
-1. Go to your app repo on GitHub
-2. Click the **Security** tab
-3. Click **Code scanning alerts**
-
-Each finding includes the tool that found it, the file and line number, severity, and a link to the relevant CWE or CVE.
+| Rule | Catches |
+|------|---------|
+| `hardcoded-aws-access-key` | AWS Access Key IDs hardcoded in source |
+| `flask-debug-mode-enabled` | Flask `debug=True` in production |
+| `npm-unsafe-perm` | `--unsafe-perm` in npm scripts |
 
 ---
 
-## Requirements
-
-- GitHub repository with Actions enabled
-- Docker-based application with a `Dockerfile` at `app/Dockerfile`
-- AWS account with:
-  - An ECR repository for your image
-  - An IAM role configured for GitHub Actions OIDC authentication
-  - The role must have ECR push permissions for your repository
-
----
-
-## Sample app
-
-A minimal Flask app is included at `sample-apps/python/` to verify the pipeline works end to end. It has no intentional vulnerabilities and exists only to prove the pipeline runs against something it did not hardcode.
-
----
-
-## Project structure
+## Repository structure
 
 ```
 securepipe/
 ├── .github/
-│   └── workflows/
-│       └── reusable-security-pipeline.yml   ← the pipeline
+│   ├── workflows/
+│   │   └── reusable-security-pipeline.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   └── feature_request.yml
+│   └── PULL_REQUEST_TEMPLATE.md
 ├── sample-apps/
-│   └── python/
-│       ├── app.py
-│       ├── requirements.txt
-│       └── Dockerfile
+│   └── python/                  minimal Flask app for end-to-end testing
+├── terraform/
+│   ├── main.tf                  OIDC provider, ECR repo, IAM role
+│   ├── variables.tf
+│   ├── outputs.tf
+│   └── README.md
 ├── .semgrep/
-│   └── custom-rules.yml                     ← custom Semgrep rules
+│   └── custom-rules.yml
+├── .zap/
+│   └── rules.tsv
 ├── docs/
-│   └── onboarding.md                        ← detailed onboarding guide
-└── README.md
+│   ├── onboarding.md            AWS setup, rollout sequence, troubleshooting
+│   └── defect-dojo-setup.md     DefectDojo on EC2, API token, import setup
+├── setup.sh                     generates caller workflow + prints required secrets
+├── Makefile                     make validate, make lint, make test
+├── USE_THIS_TEMPLATE.md         first 30 minutes after clicking Use this template
+├── CONTRIBUTING.md
+├── SECURITY.md
+└── LICENSE
 ```
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: validate YAML before every commit
+(`make validate`), test end to end against a real caller, one logical change per commit.
+
+## Security
+
+Report vulnerabilities via [GitHub Security Advisories](https://github.com/ismailarici/securepipe/security/advisories/new).
+Do not open public issues for security findings. See [SECURITY.md](SECURITY.md) for the full policy.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
