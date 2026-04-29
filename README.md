@@ -1,4 +1,4 @@
-# devsecops-pipeline-portable
+# securepipe
 
 A reusable, language-configurable security pipeline for GitHub Actions. Connect any app in under 5 minutes and get a full 9-stage security scan automatically — secrets detection, SAST, dependency scanning, container scanning, IaC scanning, SBOM generation, and DAST.
 
@@ -61,7 +61,7 @@ on:
 jobs:
   security-pipeline:
     name: Run Security Pipeline
-    uses: ismailarici/devsecops-pipeline-portable/.github/workflows/reusable-security-pipeline.yml@v1.0.0
+    uses: ismailarici/securepipe/.github/workflows/reusable-security-pipeline.yml@v1.0.0
     with:
       app-language: python
       image-name: your-app-name
@@ -192,7 +192,7 @@ A minimal Flask app is included at `sample-apps/python/` to verify the pipeline 
 ## Project structure
 
 ```
-devsecops-pipeline-portable/
+securepipe/
 ├── .github/
 │   └── workflows/
 │       └── reusable-security-pipeline.yml   ← the pipeline

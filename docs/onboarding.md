@@ -1,4 +1,4 @@
-# Onboarding Guide — devsecops-pipeline-portable
+# Onboarding Guide — securepipe
 
 This guide walks you through connecting your app to the reusable security pipeline from scratch. You should be running scans within 30 minutes.
 
@@ -140,7 +140,7 @@ on:
 jobs:
   security-pipeline:
     name: Run Security Pipeline
-    uses: ismailarici/devsecops-pipeline-portable/.github/workflows/reusable-security-pipeline.yml@v1.0.0
+    uses: ismailarici/securepipe/.github/workflows/reusable-security-pipeline.yml@v1.0.0
     with:
       app-language: python
       image-name: your-app-name
@@ -278,7 +278,7 @@ This is correct behaviour. ZAP findings are reported to the Security tab but do 
 
 ## Getting help
 
-Open an issue at github.com/ismailarici/devsecops-pipeline-portable with:
+Open an issue at github.com/ismailarici/securepipe with:
 
 - Your app language
 - The failing job name
