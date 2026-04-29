@@ -1,0 +1,59 @@
+name: Feature request
+description: Propose a new scanner, output format, integration, or pipeline capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the security problem you are trying to solve.
+        A request with a clear problem statement gets evaluated faster than one that just names a tool.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What security problem does this solve?
+      description: >
+        Describe the gap in current coverage. What does the pipeline miss today?
+        What class of vulnerability or risk is not being caught?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: >
+        What would you add or change? If you have a specific tool or approach in mind,
+        explain why it handles the problem better than what exists.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: >
+        Did you look at other tools or approaches? Why did you prefer this one?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: language-scope
+    attributes:
+      label: Language scope
+      description: Which app languages does this apply to?
+      multiple: true
+      options:
+        - all languages
+        - python
+        - node
+        - java
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willing-to-pr
+    attributes:
+      label: Willing to submit a PR?
+      options:
+        - label: Yes, I can implement this if the approach is agreed on

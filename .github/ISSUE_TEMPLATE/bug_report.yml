@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in the pipeline behaves incorrectly or differently than documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, check if this reproduces on the sample app at `sample-apps/python/`.
+        If it does, it is a pipeline bug. If it does not, include your Dockerfile and dependency file.
+
+  - type: input
+    id: pipeline-version
+    attributes:
+      label: Pipeline version
+      description: The ref you are calling — e.g. @v1.0.0, @main, or a commit SHA
+      placeholder: "@v1.0.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: app-language
+    attributes:
+      label: app-language input
+      options:
+        - python
+        - node
+        - java
+    validations:
+      required: true
+
+  - type: input
+    id: failing-job
+    attributes:
+      label: Failing job
+      description: The job name exactly as it appears in the Actions tab
+      placeholder: "Bandit Python SAST"
+    validations:
+      required: true
+
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error output
+      description: Paste the full error from the failing step. Redact any secrets.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduces-on-sample
+    attributes:
+      label: Reproduces on sample app?
+      description: Does this fail when run against sample-apps/python/? If not, what is different about your app?
+    validations:
+      required: true
