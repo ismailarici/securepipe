@@ -39,7 +39,7 @@ cd securepipe
 ./securepipe scan --target ./sample-apps/python
 ```
 
-That runs four scans against the included vulnerable sample app and writes `reports/security-report.html`.
+That runs SAST, SCA, and container scanning against the included vulnerable sample app and writes `reports/security-report.html`. DAST is skipped unless `--url` is provided.
 
 Open the report:
 
