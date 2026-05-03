@@ -293,11 +293,11 @@ def build_html(findings, generated_at):
         for t, c in tool_counts.items()
     ) if tool_counts else '<p class="empty-msg">No findings from any tool.</p>'
 
-    severities = sorted(set(f["severity"] for f in findings), key=lambda s: normalize.SEVERITY_ORDER.get(s, 5))
+    _ALL_SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
     categories = sorted(set(f["category"] for f in findings))
     all_tools_list = sorted(set(f["tool"] for f in findings))
 
-    sev_opts  = '<option value="">All severities</option>' + "".join(f'<option value="{e(s)}">{e(s)}</option>' for s in severities)
+    sev_opts  = '<option value="">All severities</option>' + "".join(f'<option value="{e(s)}">{e(s)}</option>' for s in _ALL_SEVERITIES)
     cat_opts  = '<option value="">All categories</option>' + "".join(f'<option value="{e(c)}">{e(c)}</option>' for c in categories)
     tool_opts = '<option value="">All tools</option>' + "".join(f'<option value="{e(t)}">{e(t)}</option>' for t in all_tools_list)
 

@@ -2,6 +2,7 @@ import subprocess
 import sqlite3
 import pickle
 import os
+import yaml
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -44,6 +45,14 @@ def load_data():
     data = request.get_data()
     obj = pickle.loads(data)
     return jsonify({"loaded": str(obj)})
+
+
+@app.route("/parse", methods=["POST"])
+def parse_config():
+    # Unsafe YAML deserialization — CVE-2020-14343 (CRITICAL)
+    data = request.get_data().decode()
+    parsed = yaml.load(data)
+    return jsonify({"parsed": str(parsed)})
 
 
 @app.route("/debug")
