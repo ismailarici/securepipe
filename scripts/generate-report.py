@@ -43,7 +43,16 @@ def _location(f):
         short = "/".join(parts[-2:]) if len(parts) >= 2 else path
         line = f.get("line")
         return e(f"{short}:{line}" if line else short)
-    if cat in ("SCA", "CONTAINER"):
+    if cat == "SCA":
+        pkg = f.get("package", "")
+        ver = f.get("version", "")
+        file_ref = f.get("file", "")
+        pkg_str = f"{pkg}@{ver}" if ver else pkg
+        if file_ref:
+            return (f'{e(pkg_str)}<br>'
+                    f'<span style="font-size:11px;color:#9ca3af;font-family:monospace">{e(file_ref)}</span>')
+        return e(pkg_str)
+    if cat == "CONTAINER":
         pkg = f.get("package", "")
         ver = f.get("version", "")
         return e(f"{pkg}@{ver}" if ver else pkg)
