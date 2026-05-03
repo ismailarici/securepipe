@@ -4,6 +4,7 @@
 !package.json
 !package-lock.json
 *.xml
+!pom.xml
 bandit-results.*
 semgrep.*
 trivy-results.*
@@ -38,8 +39,4 @@ Thumbs.db
 *.swp
 *.swo
 
-# scan outputs
 reports/
-*.json
-!package.json
-!package-lock.json

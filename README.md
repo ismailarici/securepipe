@@ -6,7 +6,7 @@
 
 A plug-and-play DevSecOps pipeline that runs in under 5 minutes and produces audit-ready security reports.
 
-Run it locally against any codebase. Wire it into GitHub Actions for continuous scanning. Either way, one command is all it takes.
+Run it locally against any codebase. Scan an entire org's services with one command. Wire it into GitHub Actions for continuous scanning.
 
 ---
 
@@ -65,29 +65,231 @@ To include DAST (requires a running app):
 ## CLI reference
 
 ```
-./securepipe scan [--target <path>] [--url <http://host:port>]
+./securepipe scan [--target <path>] [--url <url>] [--openapi <spec>] [--auth-header "Header: Value"] [--output-dir <path>]
+./securepipe org-scan [--config <securepipe-org.yml>]
 ./securepipe report
 ./securepipe clean
 ```
 
 | Command | What it does |
 |---------|-------------|
-| `scan` | Runs all four scanners, writes raw results to `reports/raw/`, generates `reports/security-report.html` |
+| `scan` | Runs SAST, SCA, SBOM (Java), container scan, and optionally DAST. Writes `reports/security-report.html` |
+| `org-scan` | Scans multiple repos defined in a YAML config, writes per-repo reports and an aggregated `org-summary.html` |
 | `report` | Re-generates the HTML report from existing raw results without re-running scans |
 | `clean` | Deletes the `reports/` directory and removes the temporary Docker image |
+
+### Scan flags
+
+| Flag | Description |
+|------|-------------|
+| `--target <path>` | Directory to scan (default: current directory) |
+| `--url <url>` | Run ZAP baseline DAST against a live URL |
+| `--openapi <spec>` | Run ZAP API scan using an OpenAPI YAML or JSON spec |
+| `--auth-header "Header: Value"` | Inject an auth header into every ZAP request (e.g. `"Authorization: Bearer token"`) |
+| `--output-dir <path>` | Write reports to a custom directory (used internally by `org-scan`) |
+
+### Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `NVDAPIKEY` | NVD API key for OWASP Dependency-Check. Free to obtain at nvd.nist.gov/developers/request-an-api-key. Without it, the first Java scan is very slow due to NVD rate limits. |
 
 ---
 
 ## Security stack
 
-| Stage | Tool | Why |
-|-------|------|-----|
-| SAST | Semgrep | Fast, accurate, 1000+ rules out of the box, runs in Docker with zero config |
-| SCA | pip-audit / npm-audit | Official package-level CVE detection for Python and Node, auto-detected from project files |
-| Container scan | Trivy | Scans both filesystem and Docker images, covers OS packages and language deps |
-| DAST | OWASP ZAP baseline | Runtime scan for injection, missing headers, broken access — catches what static analysis misses |
+| Stage | Tool | Languages | Why |
+|-------|------|-----------|-----|
+| SAST | Semgrep | Python, Node.js, Java | Fast, accurate, 1000+ rules, runs in Docker with zero config |
+| SCA | pip-audit | Python | Official CVE detection for Python packages |
+| SCA | npm audit | Node.js | CVE detection for npm packages |
+| SCA | OWASP Dependency-Check | Java | CVE detection for Maven/Gradle dependencies |
+| SBOM | Syft | Java | Full software bill of materials in SPDX format |
+| Container scan | Trivy | All | Scans both Dockerfile images and filesystem; covers OS packages and language deps |
+| DAST (baseline) | OWASP ZAP | All | Runtime scan for injection, missing headers, broken access |
+| DAST (API) | OWASP ZAP api-scan | All | OpenAPI-driven scan that tests every defined endpoint |
 
-TruffleHog (secret scanning across git history) runs in the GitHub Actions pipeline, not in the local CLI, because it needs the full git history to be effective. Wire up the Actions pipeline to get secret scanning on every push.
+Language detection is automatic — SecurePipe reads `pom.xml`/`build.gradle` for Java, `requirements.txt` for Python, `package.json` for Node.js.
+
+TruffleHog (secret scanning across git history) runs in the GitHub Actions pipeline, not the local CLI, because it needs the full git history to be effective.
+
+---
+
+## Multi-repo scanning
+
+To scan multiple services and get a unified org-level report:
+
+```bash
+./securepipe org-scan --config securepipe-org.yml
+```
+
+Create a `securepipe-org.yml` config:
+
+```yaml
+repos:
+  - name: python-api
+    path: ./repos/python-api
+
+  - name: node-frontend
+    path: ./repos/node-frontend
+    url: http://localhost:3000        # optional: enables DAST
+
+  - name: java-service
+    path: ./repos/java-service
+```
+
+This produces:
+
+```
+reports/
+├── org-summary.html          ← aggregated view across all repos
+├── python-api/
+│   ├── security-report.html  ← per-service report (for auditors)
+│   └── raw/                  ← raw JSON from each tool
+├── node-frontend/
+│   ├── security-report.html
+│   └── raw/
+└── java-service/
+    ├── security-report.html
+    └── raw/
+```
+
+`org-summary.html` shows total findings, severity breakdown, and a per-repo status table. Each repo name links to its individual report. Both the summary and individual reports are self-contained HTML — no server required to open them.
+
+**For audits:** submit the individual `security-report.html` per service plus `org-summary.html` as the executive summary. The `raw/` folders contain the machine-readable JSON for deeper review.
+
+If one repo fails, scanning continues for the remaining repos.
+
+An example config is at `examples/securepipe-org.yml`.
+
+---
+
+## DAST — OpenAPI and authenticated scanning
+
+### OpenAPI-driven scan
+
+Pass an OpenAPI spec to ensure every defined endpoint is tested:
+
+```bash
+./securepipe scan --target ./api --openapi ./openapi.yaml
+```
+
+Supports both YAML and JSON specs. SecurePipe passes the spec to ZAP's `api-scan` mode, which imports the endpoint list and actively probes each one.
+
+### Authenticated DAST
+
+Add an auth header to every ZAP request:
+
+```bash
+./securepipe scan --url http://localhost:3000 --auth-header "Authorization: Bearer $TOKEN"
+```
+
+The header value is never logged. To avoid the token appearing in your shell history, pass it via an environment variable:
+
+```bash
+./securepipe scan --url http://localhost:3000 --auth-header "Authorization: Bearer $(cat .token)"
+```
+
+---
+
+## Java support
+
+SecurePipe detects Java projects automatically via `pom.xml` or `build.gradle` and runs:
+
+- **Semgrep** with `--config auto` (includes Java rules for injection, XXE, insecure deserialization)
+- **OWASP Dependency-Check** — Docker-based CVE scan of Maven/Gradle dependencies
+- **Syft** — generates SBOM in SPDX JSON format
+- **Trivy** — container scan if a Dockerfile is present, filesystem scan otherwise
+
+**First run note:** OWASP Dependency-Check downloads the NVD vulnerability database on first use. This takes several minutes without an API key and is much faster with one. Get a free key at [nvd.nist.gov/developers/request-an-api-key](https://nvd.nist.gov/developers/request-an-api-key) and set `export NVDAPIKEY=your-key`. The database is cached at `~/.dependency-check/data/` so subsequent runs are fast.
+
+---
+
+## Sample apps
+
+Three deliberately vulnerable sample apps are included for demo scans:
+
+| App | Path | Seeded issues |
+|-----|------|---------------|
+| Python (Flask) | `sample-apps/python/` | SQL injection, command injection, insecure deserialization, hardcoded credentials, debug mode, old deps |
+| Node.js (Express) | `sample-apps/node/` | Command injection, XSS, prototype pollution, hardcoded secrets, old deps (lodash 4.17.20, axios 0.21.1) |
+| Java | `sample-apps/java/` | SQL injection, command injection, insecure deserialization, hardcoded credentials, log4j 2.14.1, jackson-databind 2.12.3 |
+
+Run `./securepipe org-scan --config examples/securepipe-org.yml` to scan all three at once.
+
+---
+
+## Report
+
+Each scan produces a self-contained HTML report with:
+
+- Summary counts by severity (Critical, High, Medium, Low)
+- Per-tool finding count
+- Findings table sorted by severity — tool, file, line, description
+- Recommendations with priority ranking
+- Compliance mapping table (SOC 2, ISO 27001)
+
+Raw JSON outputs are saved in `reports/raw/` alongside the HTML for auditor inspection.
+
+---
+
+## Compliance mapping
+
+| Control | Tools | What it satisfies |
+|---------|-------|------------------|
+| SOC 2 — CC6.6 | Semgrep, pip-audit, OWASP-DC, Trivy | Logical access controls, vulnerability identification evidence |
+| SOC 2 — CC7.1 | Semgrep, Trivy, ZAP | Detection and monitoring of security threats |
+| ISO 27001 — A.12.6.1 | All tools | Technical vulnerability management — documented scan, findings, remediation |
+| ISO 27001 — A.14.2.3 | Semgrep, ZAP | Application security testing after environment changes |
+
+### Audit evidence
+
+Every scan produces:
+
+| Artifact | Location | Use |
+|----------|----------|-----|
+| HTML report | `reports/security-report.html` | Evidence package for auditors |
+| Org summary | `reports/org-summary.html` | Executive summary across all services |
+| Semgrep JSON | `reports/raw/semgrep.json` | Source code vulnerability detail |
+| SCA JSON | `reports/raw/sca.json` | Dependency CVE inventory (pip-audit, npm-audit, or OWASP-DC) |
+| SBOM JSON | `reports/raw/sbom.json` | Software bill of materials (Java only) |
+| Trivy JSON | `reports/raw/trivy.json` | Container vulnerability inventory |
+| ZAP JSON | `reports/raw/zap.json` | Runtime security findings |
+
+All reports are timestamped and self-contained — no external dependencies to open them. Auditors can inspect the raw JSON files to verify tool versions and finding details.
+
+To demonstrate compliance: run `./securepipe scan` before each release, store the `reports/` folder in a private evidence repository, and reference it in your control documentation.
+
+---
+
+## Architecture
+
+```
+./securepipe scan
+│
+├── run_sast()      → docker run returntocorp/semgrep      → raw/semgrep.json
+├── run_sca()       → pip-audit / npm-audit / OWASP-DC     → raw/sca.json
+│                     (auto-detected from project files)
+├── run_sbom()      → docker run anchore/syft (Java only)  → raw/sbom.json
+├── run_container() → docker run aquasec/trivy             → raw/trivy.json
+│                     (image scan if Dockerfile, fs scan otherwise)
+└── run_dast()      → docker run ghcr.io/zaproxy/zaproxy   → raw/zap.json
+                      (skipped unless --url or --openapi provided)
+                            │
+                     scripts/generate-report.py
+                            │
+                     reports/security-report.html
+
+./securepipe org-scan
+│
+├── scripts/org-scan.py
+│     └── calls ./securepipe scan --output-dir reports/<repo> per repo
+│
+└── scripts/generate-org-report.py
+      └── reads reports/*/raw/*.json → reports/org-summary.html
+```
+
+Each scanner runs in its own Docker container. Nothing is installed on the host. Org scan runs repos sequentially and continues if one fails.
 
 ---
 
@@ -131,86 +333,6 @@ See [docs/onboarding.md](docs/onboarding.md) for the full setup guide including 
 
 ---
 
-## Sample app
-
-`sample-apps/python/` contains a deliberately vulnerable Flask app with seeded issues:
-
-- SQL injection (unsanitised query string in database lookup)
-- OS command injection (`shell=True` with user input)
-- Insecure deserialization (`pickle.loads` on raw POST body)
-- Hardcoded credentials (AWS key and database password in source)
-- `debug=True` in production
-- Vulnerable dependency versions (Flask 2.0.1, requests 2.27.1, Werkzeug 2.0.3)
-
-Run `./securepipe scan --target ./sample-apps/python` to see all of them flagged.
-
----
-
-## Report
-
-The HTML report includes:
-
-- Summary counts by severity (Critical, High, Medium, Low)
-- Per-tool finding count
-- Sortable findings table with tool, severity, file, line, and description
-- Recommendations with priority ranking
-- Compliance mapping table (SOC 2, ISO 27001)
-
-Raw JSON outputs are saved in `reports/raw/` alongside the HTML for auditor inspection.
-
----
-
-## Compliance mapping
-
-| Control | Tools | What it satisfies |
-|---------|-------|------------------|
-| SOC 2 — CC6.6 | Semgrep, pip-audit, Trivy | Logical access controls, vulnerability identification evidence |
-| SOC 2 — CC7.1 | Semgrep, Trivy, ZAP | Detection and monitoring of security threats |
-| ISO 27001 — A.12.6.1 | All tools | Technical vulnerability management — documented scan, findings, remediation |
-| ISO 27001 — A.14.2.3 | Semgrep, ZAP | Application security testing after environment changes |
-
-### Audit evidence
-
-Every scan produces:
-
-| Artifact | Location | Use |
-|----------|----------|-----|
-| HTML report | `reports/security-report.html` | Evidence package for auditors |
-| Semgrep JSON | `reports/raw/semgrep.json` | Source code vulnerability detail |
-| SCA JSON | `reports/raw/sca.json` | Dependency CVE inventory |
-| Trivy JSON | `reports/raw/trivy.json` | Container vulnerability inventory |
-| ZAP JSON | `reports/raw/zap.json` | Runtime security findings |
-
-Auditors can verify the scan ran, what version of each tool was used (Docker image tags), and what the findings were. The HTML report is timestamped and self-contained — no external dependencies to open it.
-
-To demonstrate compliance: run `./securepipe scan` before each release, commit the report to a private evidence repository, and reference it in your control documentation.
-
----
-
-## Architecture
-
-```
-securepipe (bash CLI)
-│
-├── run_sast()      → docker run returntocorp/semgrep  → reports/raw/semgrep.json
-├── run_sca()       → docker run python:3.12-slim       → reports/raw/sca.json
-│                     (pip-audit, auto-detected)
-├── run_container() → docker run aquasec/trivy          → reports/raw/trivy.json
-│                     (builds image from Dockerfile first if present)
-└── run_dast()      → docker run ghcr.io/zaproxy/zaproxy → reports/raw/zap.json
-                      (skipped unless --url is provided)
-                            │
-                     scripts/generate-report.py
-                            │
-                     reports/security-report.html
-```
-
-Each scanner runs in its own Docker container. No tool is installed on the host machine. Scan results are written to `reports/raw/` as JSON, then aggregated into a single HTML report.
-
-Image sharing for the container scan: if a Dockerfile is found in the target directory, SecurePipe builds a local Docker image, passes it to Trivy, then removes it on `./securepipe clean`. If no Dockerfile is found, Trivy runs a filesystem scan instead.
-
----
-
 ## Why not X?
 
 ### GitHub Advanced Security
@@ -233,12 +355,18 @@ Running each tool manually means different output formats, different CI configs,
 securepipe/
 ├── securepipe                               # CLI entry point
 ├── scripts/
-│   └── generate-report.py                  # aggregates raw JSON → HTML
+│   ├── generate-report.py                  # per-repo JSON → HTML report
+│   ├── generate-org-report.py              # multi-repo → org-summary.html
+│   └── org-scan.py                         # multi-repo scan orchestrator
 ├── .github/
 │   └── workflows/
 │       └── reusable-security-pipeline.yml  # GitHub Actions reusable pipeline
 ├── sample-apps/
-│   └── python/                             # vulnerable Flask app for demo scans
+│   ├── python/                             # vulnerable Flask app
+│   ├── node/                               # vulnerable Express app
+│   └── java/                              # vulnerable Java app (log4j, jackson-databind)
+├── examples/
+│   └── securepipe-org.yml                  # example org-scan config
 ├── terraform/                              # AWS OIDC + ECR provisioning
 ├── .semgrep/
 │   └── custom-rules.yml                    # org-specific rules
@@ -251,12 +379,6 @@ securepipe/
 ├── reports/                                # gitignored scan output
 └── Makefile
 ```
-
----
-
-## Java support
-
-Java is supported in the GitHub Actions pipeline (Semgrep with Java rules, Checkov for IaC). OWASP Dependency Check for Java dependencies is on the roadmap. The local CLI scanner currently covers Python and Node.js SCA; Java SCA via the CLI is not included because `dependency-check` has significant startup overhead in Docker. If you need Java SCA in CI, the Actions pipeline handles it via Semgrep.
 
 ---
 

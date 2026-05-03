@@ -1,0 +1,9 @@
+repos:
+  - name: python-api
+    path: ./sample-apps/python
+
+  - name: node-frontend
+    path: ./sample-apps/node
+
+  - name: java-service
+    path: ./sample-apps/java

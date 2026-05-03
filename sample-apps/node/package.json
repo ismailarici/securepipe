@@ -1,0 +1,14 @@
+{
+  "name": "securepipe-node-sample",
+  "version": "1.0.0",
+  "description": "Deliberately vulnerable Node.js app for SecurePipe demo scans",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "4.17.1",
+    "lodash": "4.17.20",
+    "axios": "0.21.1"
+  }
+}

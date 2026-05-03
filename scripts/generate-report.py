@@ -75,6 +75,21 @@ def parse_trivy(data):
     return findings
 
 
+def parse_dependency_check(data):
+    findings = []
+    for dep in data.get("dependencies", []):
+        for vuln in dep.get("vulnerabilities", []):
+            findings.append({
+                "tool": "OWASP-DC",
+                "severity": vuln.get("severity", "UNKNOWN").upper(),
+                "title": vuln.get("name", "CVE-unknown"),
+                "file": dep.get("fileName", ""),
+                "line": "",
+                "message": (vuln.get("description", "") or "")[:200],
+            })
+    return findings
+
+
 def parse_zap(data):
     findings = []
     for site in data.get("site", []):
@@ -243,8 +258,11 @@ def main():
         findings += parse_semgrep(load_json(raw / "semgrep.json"))
     if (raw / "sca.json").exists():
         sca = load_json(raw / "sca.json")
-        if "dependencies" in sca:
+        deps = sca.get("dependencies", [])
+        if deps and "vulns" in (deps[0] if deps else {}):
             findings += parse_pip_audit(sca)
+        elif deps and "vulnerabilities" in (deps[0] if deps else {}):
+            findings += parse_dependency_check(sca)
         elif "vulnerabilities" in sca:
             findings += parse_npm_audit(sca)
     if (raw / "trivy.json").exists():
