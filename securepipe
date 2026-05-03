@@ -264,6 +264,13 @@ run_dast() {
   ok "ZAP scan complete"
 }
 
+run_imports() {
+  log "Scanning source for import statements ..."
+  python3 "$SCRIPT_DIR/scripts/find-imports.py" \
+    --source-dir "$TARGET" \
+    --output "$RAW_DIR/imports.json" 2>/dev/null || true
+}
+
 generate_report() {
   section "Report Generation"
   log "Generating security-report.html ..."
@@ -319,6 +326,7 @@ cmd_scan() {
   require_docker
   run_sast
   run_sca
+  run_imports
   run_sbom
   run_container_scan
   run_dast

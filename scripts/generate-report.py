@@ -50,7 +50,8 @@ def _location(f):
         pkg_str = f"{pkg}@{ver}" if ver else pkg
         if file_ref:
             return (f'{e(pkg_str)}<br>'
-                    f'<span style="font-size:11px;color:#9ca3af;font-family:monospace">{e(file_ref)}</span>')
+                    f'<span style="font-size:11px;color:#9ca3af">Declared in: '
+                    f'<span style="font-family:monospace">{e(file_ref)}</span></span>')
         return e(pkg_str)
     if cat == "CONTAINER":
         pkg = f.get("package", "")
@@ -71,7 +72,9 @@ def _location(f):
 def _tool_label(f):
     sources = f.get("sources")
     if sources and len(sources) > 1:
-        return e(" + ".join(sources))
+        # Show each source on its own line for clarity
+        bullets = "".join(f'<div style="font-size:11px">&#8226; {e(s)}</div>' for s in sources)
+        return f'<div style="line-height:1.6">{bullets}</div>'
     return e(f.get("tool", ""))
 
 
@@ -108,10 +111,34 @@ def _detail_panel(f):
         if fixed:
             parts.append(f'<div class="dl"><div class="dt">Fix version</div>'
                          f'<div class="dd"><code style="color:#16a34a;font-weight:600">{e(fixed)}</code></div></div>')
+
+        # Declared in + Used in (SCA only)
+        if cat == "SCA":
+            file_ref = f.get("file", "")
+            used_in = f.get("used_in", [])
+            if file_ref or used_in:
+                declared = f'<div style="margin-bottom:4px"><span style="color:#6b7280;font-size:11px">Declared in</span> <code>{e(file_ref)}</code></div>' if file_ref else ""
+                if used_in:
+                    usage_lines = "".join(
+                        f'<div style="font-size:12px;font-family:monospace;padding-left:8px">'
+                        f'&#8226; {e(u["file"])}:{u["line"]}</div>'
+                        for u in used_in
+                    )
+                    used_block = (f'<div style="color:#6b7280;font-size:11px;margin-top:6px">Used in</div>'
+                                  f'{usage_lines}')
+                else:
+                    used_block = '<div style="font-size:12px;color:#9ca3af;margin-top:4px">No direct import found in source (may be a transitive dependency)</div>'
+                parts.append(f'<div class="dl"><div class="dt">Location</div>'
+                             f'<div class="dd">{declared}{used_block}</div></div>')
+
+        # Dependency chain (npm-audit via[])
         dep_path = f.get("dependency_path", [])
         if dep_path:
-            parts.append(f'<div class="dl"><div class="dt">Dep path</div>'
-                         f'<div class="dd"><code>{e(" → ".join(dep_path))}</code></div></div>')
+            chain = e(" → ".join(dep_path))
+            parts.append(f'<div class="dl"><div class="dt">Dep chain</div>'
+                         f'<div class="dd"><code>{chain}</code></div></div>')
+
+        # Container target
         if cat == "CONTAINER":
             target = f.get("container_target", "")
             ct = f.get("container_type", "")
@@ -119,10 +146,6 @@ def _detail_panel(f):
                 type_note = f' <small style="color:#6b7280">({e(ct)})</small>' if ct else ""
                 parts.append(f'<div class="dl"><div class="dt">Target</div>'
                              f'<div class="dd"><code>{e(target)}</code>{type_note}</div></div>')
-        file_ref = f.get("file", "")
-        if file_ref:
-            parts.append(f'<div class="dl"><div class="dt">File</div>'
-                         f'<div class="dd"><code>{e(file_ref)}</code></div></div>')
 
     if cat == "DAST":
         ep = f.get("endpoint", "")
@@ -140,10 +163,21 @@ def _detail_panel(f):
             parts.append(f'<div class="dl"><div class="dt">Evidence</div>'
                          f'<div class="dd"><code>{e(evidence)}</code></div></div>')
 
+    # Impact
+    impact = f.get("impact", "")
+    if impact:
+        parts.append(f'<div class="dl"><div class="dt">Impact</div>'
+                     f'<div class="dd impact-text">{e(impact)}</div></div>')
+
+    # Fix + Why
     fix = f.get("fix", "")
+    cve_title = f.get("cve_title", "")
     if fix:
+        why_html = ""
+        if cve_title:
+            why_html = f'<div class="why-text">Why: {e(cve_title)}</div>'
         parts.append(f'<div class="dl"><div class="dt">Fix</div>'
-                     f'<div class="dd fix-text">{e(fix)}</div></div>')
+                     f'<div class="dd fix-text">{e(fix)}{why_html}</div></div>')
 
     rule_id = f.get("rule_id", "")
     if rule_id:
@@ -155,10 +189,12 @@ def _detail_panel(f):
         parts.append(f'<div class="dl"><div class="dt">CVE / ID</div>'
                      f'<div class="dd"><code>{e(cve)}</code></div></div>')
 
+    # Found by (dedup) — shown prominently
     sources = f.get("sources", [])
     if sources and len(sources) > 1:
+        bullets = "".join(f'<div>&#8226; {e(s)}</div>' for s in sources)
         parts.append(f'<div class="dl"><div class="dt">Found by</div>'
-                     f'<div class="dd">{e(", ".join(sources))}</div></div>')
+                     f'<div class="dd" style="font-size:13px">{bullets}</div></div>')
 
     refs = f.get("references", [])
     if refs:
@@ -361,6 +397,8 @@ _HTML_HEAD = """<!DOCTYPE html>
   .dt { min-width: 120px; font-weight: 600; color: #374151; flex-shrink: 0; padding-top: 1px; }
   .dd { color: #1f2937; line-height: 1.55; word-break: break-word; }
   .fix-text { color: #065f46; font-weight: 500; background: #f0fdf4; padding: 6px 10px; border-radius: 4px; }
+  .why-text { margin-top: 6px; font-size: 12px; color: #374151; font-weight: 400; font-style: italic; }
+  .impact-text { color: #92400e; background: #fffbeb; padding: 5px 10px; border-radius: 4px; font-weight: 500; }
   pre.snippet { background: #1e1e1e; color: #d4d4d4; padding: 10px 14px; border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre; margin-top: 4px; }
   .ref-links a { color: #2563eb; font-size: 12px; display: block; word-break: break-all; text-decoration: none; }
   .ref-links a:hover { text-decoration: underline; }
