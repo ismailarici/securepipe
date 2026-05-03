@@ -37,3 +37,9 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# scan outputs
+reports/
+*.json
+!package.json
+!package-lock.json

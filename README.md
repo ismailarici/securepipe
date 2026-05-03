@@ -4,101 +4,96 @@
 [![Latest tag](https://img.shields.io/github/v/tag/ismailarici/securepipe)](https://github.com/ismailarici/securepipe/tags)
 [![Example pipeline](https://github.com/ismailarici/secureapp-v2/actions/workflows/pipeline.yml/badge.svg)](https://github.com/ismailarici/secureapp-v2/actions/workflows/pipeline.yml)
 
-A reusable GitHub Actions security pipeline. One caller file in your app repo triggers a full
-10-stage scan — secrets, SAST, dependency CVEs, container vulnerabilities, IaC misconfigurations,
-SBOM generation, and DAST. All findings land in the GitHub Security tab or your DefectDojo instance.
+A plug-and-play DevSecOps pipeline that runs in under 5 minutes and produces audit-ready security reports.
+
+Run it locally against any codebase. Wire it into GitHub Actions for continuous scanning. Either way, one command is all it takes.
 
 ---
 
-## Who is this for
+## Who this is for
 
-Teams that want serious security coverage without maintaining pipeline code in every repo.
+- **Engineering teams without a dedicated security engineer** who need automated scanning before an audit
+- **Startups preparing for SOC 2 or ISO 27001** who want evidence without hiring a consultant
+- **Platform teams** rolling out a security baseline across multiple repos
+- **Solo developers** who want the same coverage a well-staffed security team would run
 
-SecurePipe is a single reusable workflow. Your app repos contain one caller file (~20 lines) that
-references it. When you need to update a scanner, change a rule, or fix a step, you do it once
-here and every connected repo picks it up automatically.
-
-It works for:
-
-- **Small teams** shipping fast who want automated scanning without a dedicated security engineer
-- **Platform engineers** who want a standard security baseline rolled out across all app repos in an org
-- **Solo developers** who want the same tooling a well-staffed security team would use
-
-It is not for teams that already have a commercial SAST/SCA product they are happy with. If you
-have Snyk or Semgrep Pro and it is working, stay with it. SecurePipe is for teams that want
-solid open source coverage wired up correctly.
+It is not for teams that already have Snyk or Semgrep Pro and are happy with them. If your existing tooling works, keep it. SecurePipe is for teams that want serious coverage without per-seat licensing costs.
 
 ---
 
-## What it runs
+## What problem it solves
 
-| Stage | Tool | Catches |
-|-------|------|---------|
-| Secrets gate | TruffleHog | Live credentials in code and full git history |
-| Python SAST | Bandit | Python-specific security antipatterns |
-| Multi-language SAST | Semgrep | OWASP Top 10, injection, misconfigs, custom rules |
-| Python dependencies | pip-audit | CVEs in Python packages |
-| Node.js dependencies | npm-audit | CVEs in npm packages |
-| IaC | Checkov | Terraform and Dockerfile misconfigurations |
-| Image build + SBOM | Syft | Full software bill of materials in SPDX format |
-| Container scan | Trivy | OS and library CVEs in your Docker image |
-| DAST | OWASP ZAP | Runtime issues — injection, missing headers, broken access control |
-| Findings import | DefectDojo | Persistent finding management across all repos (optional) |
+Most teams know they should run SAST, SCA, and container scanning. In practice, each tool has a different setup, different output format, and different CI configuration. A week of work turns into months of drift.
 
-TruffleHog runs first and blocks everything else if it finds a live credential. Trivy is the
-hard severity gate — it fails the build at your configured threshold. Everything else reports
-findings without blocking, so a noisy first scan does not break your CI.
+SecurePipe standardises all of it into a single command. One output. One report. Formats that auditors can open without explanation.
 
 ---
 
-## How to connect your app
+## Quick start (local)
 
-### Quickstart (30 minutes)
-
-Run the setup script to generate a pre-filled caller workflow and the exact secrets you need to add:
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ismailarici/securepipe/main/setup.sh) \
-  --org your-org \
-  --repo your-app-repo \
-  --language python
-```
-
-Or clone this repo and run it locally:
+Prerequisites: Docker and Python 3.
 
 ```bash
 git clone https://github.com/ismailarici/securepipe.git
 cd securepipe
-bash setup.sh --org your-org --repo your-app-repo --language python
+./securepipe scan --target ./sample-apps/python
 ```
 
-For a full walkthrough including AWS OIDC setup and troubleshooting, see [docs/onboarding.md](docs/onboarding.md).
+That runs four scans against the included vulnerable sample app and writes `reports/security-report.html`.
 
-### Manual setup
-
-**Step 1 — Provision AWS infrastructure (skip if you already have ECR + OIDC role)**
+Open the report:
 
 ```bash
-cd terraform/
-terraform init
-terraform apply -var="github_org=your-org" -var="github_repo=your-app-repo"
+open reports/security-report.html   # macOS
+xdg-open reports/security-report.html  # Linux
 ```
 
-This creates an ECR repository, a GitHub Actions OIDC provider, and a scoped IAM role.
-Copy the `role_arn` and `aws_account_id` outputs — you need them as secrets.
+To scan your own code:
 
-**Step 2 — Add secrets to your app repo**
+```bash
+./securepipe scan --target /path/to/your/app
+```
 
-Settings → Secrets and variables → Actions:
+To include DAST (requires a running app):
 
-| Secret | Value |
-|--------|-------|
-| `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID |
-| `AWS_ROLE_ARN` | `arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME` |
+```bash
+./securepipe scan --target ./your-app --url http://localhost:3000
+```
 
-**Step 3 — Create the caller workflow**
+---
 
-Create `.github/workflows/pipeline.yml` in your app repo:
+## CLI reference
+
+```
+./securepipe scan [--target <path>] [--url <http://host:port>]
+./securepipe report
+./securepipe clean
+```
+
+| Command | What it does |
+|---------|-------------|
+| `scan` | Runs all four scanners, writes raw results to `reports/raw/`, generates `reports/security-report.html` |
+| `report` | Re-generates the HTML report from existing raw results without re-running scans |
+| `clean` | Deletes the `reports/` directory and removes the temporary Docker image |
+
+---
+
+## Security stack
+
+| Stage | Tool | Why |
+|-------|------|-----|
+| SAST | Semgrep | Fast, accurate, 1000+ rules out of the box, runs in Docker with zero config |
+| SCA | pip-audit / npm-audit | Official package-level CVE detection for Python and Node, auto-detected from project files |
+| Container scan | Trivy | Scans both filesystem and Docker images, covers OS packages and language deps |
+| DAST | OWASP ZAP baseline | Runtime scan for injection, missing headers, broken access — catches what static analysis misses |
+
+TruffleHog (secret scanning across git history) runs in the GitHub Actions pipeline, not in the local CLI, because it needs the full git history to be effective. Wire up the Actions pipeline to get secret scanning on every push.
+
+---
+
+## GitHub Actions pipeline
+
+For CI, connect your repo to the reusable pipeline in one file:
 
 ```yaml
 name: Security Pipeline
@@ -108,11 +103,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
 
 jobs:
   security-pipeline:
-    name: Run Security Pipeline
     uses: ismailarici/securepipe/.github/workflows/reusable-security-pipeline.yml@main
     with:
       app-language: python
@@ -125,183 +118,112 @@ jobs:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 ```
 
-**Step 4 — Enable Actions write permissions**
+The GitHub Actions pipeline adds:
 
-Settings → Actions → General → Workflow permissions → Read and write permissions.
+- **TruffleHog** — verified secret scanning across the entire git history
+- **Bandit** — Python-specific SAST with SARIF output to the Security tab
+- **Checkov** — Terraform and Dockerfile IaC misconfigurations
+- **Syft** — SBOM generation in SPDX format
+- **DefectDojo** integration — persistent finding management (optional)
+- **Multi-cloud support** — AWS ECR, Azure ACR, and GCP Artifact Registry
 
-Push the file and watch the Actions tab.
-
----
-
-## Configuration
-
-### Inputs
-
-| Input | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `app-language` | Yes | — | `python`, `node`, or `java` |
-| `image-name` | Yes | — | Docker image name (matches your ECR repo name) |
-| `app-port` | No | `5000` | Port your app exposes |
-| `fail-severity` | No | `HIGH` | Trivy severity that fails the build (`CRITICAL`, `HIGH`, `MEDIUM`) |
-| `aws-region` | No | `us-east-1` | AWS region for ECR |
-| `cloud-provider` | No | `aws` | Registry provider: `aws`, `azure`, or `gcp` |
-| `registry-url` | No | `""` | Registry hostname for Azure/GCP (AWS is derived automatically) |
-| `reporting-mode` | No | `sarif` | `sarif` uploads to GitHub Security tab; `artifacts` uploads SARIF as downloadable files (for private repos without GHAS) |
-| `defectdojo-url` | No | `""` | Base URL of your DefectDojo instance. When set, all findings are imported after scanning. |
-
-### Secrets
-
-| Secret | When required |
-|--------|--------------|
-| `AWS_ACCOUNT_ID` | `cloud-provider: aws` |
-| `AWS_ROLE_ARN` | `cloud-provider: aws` |
-| `AZURE_CLIENT_ID` | `cloud-provider: azure` |
-| `AZURE_TENANT_ID` | `cloud-provider: azure` |
-| `AZURE_SUBSCRIPTION_ID` | `cloud-provider: azure` |
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | `cloud-provider: gcp` |
-| `GCP_SERVICE_ACCOUNT` | `cloud-provider: gcp` |
-| `DEFECTDOJO_TOKEN` | `defectdojo-url` is set |
-| `SEMGREP_APP_TOKEN` | Optional — enables Semgrep cloud features |
+See [docs/onboarding.md](docs/onboarding.md) for the full setup guide including AWS OIDC provisioning.
 
 ---
 
-## Multi-cloud support
+## Sample app
 
-The pipeline pushes your image to the registry of your chosen cloud provider. All three use
-short-lived OIDC credentials — no long-lived keys stored anywhere.
+`sample-apps/python/` contains a deliberately vulnerable Flask app with seeded issues:
 
-| Provider | Registry | Auth |
-|----------|----------|------|
-| AWS (default) | Amazon ECR | OIDC via `aws-actions/configure-aws-credentials` |
-| Azure | Azure Container Registry | Federated credentials via `azure/login` |
-| GCP | Google Artifact Registry | Workload Identity Federation via `google-github-actions/auth` |
+- SQL injection (unsanitised query string in database lookup)
+- OS command injection (`shell=True` with user input)
+- Insecure deserialization (`pickle.loads` on raw POST body)
+- Hardcoded credentials (AWS key and database password in source)
+- `debug=True` in production
+- Vulnerable dependency versions (Flask 2.0.1, requests 2.27.1, Werkzeug 2.0.3)
 
-For Azure and GCP setup, see [docs/onboarding.md](docs/onboarding.md).
-
----
-
-## DefectDojo integration
-
-When `defectdojo-url` is set, the pipeline imports all SARIF findings into DefectDojo after
-every run. It creates a product (named after your repo) and a new engagement per run. The
-`close_old_findings` flag means resolved issues are automatically marked mitigated.
-
-```yaml
-    with:
-      defectdojo-url: https://defectdojo.yourdomain.com
-    secrets:
-      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
-```
-
-For DefectDojo deployment and setup, see [docs/defect-dojo-setup.md](docs/defect-dojo-setup.md).
+Run `./securepipe scan --target ./sample-apps/python` to see all of them flagged.
 
 ---
 
-## Private repo support
+## Report
 
-GitHub Advanced Security (GHAS) is required to upload SARIF to the Security tab on private
-repos. If your repo is private and you do not have GHAS, set `reporting-mode: artifacts`.
-All SARIF files are uploaded as downloadable run artifacts with 30-day retention instead.
-The pipeline summary table still prints to the Actions run page regardless of mode.
+The HTML report includes:
 
-```yaml
-    with:
-      reporting-mode: artifacts
-```
+- Summary counts by severity (Critical, High, Medium, Low)
+- Per-tool finding count
+- Sortable findings table with tool, severity, file, line, and description
+- Recommendations with priority ranking
+- Compliance mapping table (SOC 2, ISO 27001)
+
+Raw JSON outputs are saved in `reports/raw/` alongside the HTML for auditor inspection.
 
 ---
 
-## How it compares to commercial tools
+## Compliance mapping
 
-| Capability | SecurePipe | Snyk | Semgrep Pro | Wiz |
-|------------|-----------|------|-------------|-----|
-| Secrets scanning | TruffleHog (verified) | Yes | Yes | No |
-| SAST | Bandit + Semgrep OSS | Yes | Yes (more rules) | No |
-| Dependency CVEs | pip-audit / npm-audit | Yes (deeper) | Yes | No |
-| Container scanning | Trivy | Yes | No | Yes |
-| IaC scanning | Checkov | Partial | Yes | Yes |
-| DAST | OWASP ZAP | No | No | No |
-| SBOM | Syft (SPDX) | Yes | No | Partial |
-| Cloud runtime | No | No | No | Yes |
-| Cost | Free | Freemium / paid | Freemium / paid | Paid |
-| Self-hosted | Yes | Partial | Partial | No |
-| Customisable rules | Yes (.semgrep/) | Limited | Yes | Limited |
+| Control | Tools | What it satisfies |
+|---------|-------|------------------|
+| SOC 2 — CC6.6 | Semgrep, pip-audit, Trivy | Logical access controls, vulnerability identification evidence |
+| SOC 2 — CC7.1 | Semgrep, Trivy, ZAP | Detection and monitoring of security threats |
+| ISO 27001 — A.12.6.1 | All tools | Technical vulnerability management — documented scan, findings, remediation |
+| ISO 27001 — A.14.2.3 | Semgrep, ZAP | Application security testing after environment changes |
 
-The short version: SecurePipe covers more of the pipeline than any single commercial tool at
-zero cost. The trade-offs are rule depth (Semgrep Pro has a larger rule set), ecosystem
-integrations (Snyk has tighter package manager support), and cloud runtime visibility (only
-Wiz covers that). If runtime security and deep SCA are your top priorities, evaluate those
-tools on their own merits. For CI pipeline scanning with no per-seat cost, SecurePipe covers
-the full surface area.
+### Audit evidence
+
+Every scan produces:
+
+| Artifact | Location | Use |
+|----------|----------|-----|
+| HTML report | `reports/security-report.html` | Evidence package for auditors |
+| Semgrep JSON | `reports/raw/semgrep.json` | Source code vulnerability detail |
+| SCA JSON | `reports/raw/sca.json` | Dependency CVE inventory |
+| Trivy JSON | `reports/raw/trivy.json` | Container vulnerability inventory |
+| ZAP JSON | `reports/raw/zap.json` | Runtime security findings |
+
+Auditors can verify the scan ran, what version of each tool was used (Docker image tags), and what the findings were. The HTML report is timestamped and self-contained — no external dependencies to open it.
+
+To demonstrate compliance: run `./securepipe scan` before each release, commit the report to a private evidence repository, and reference it in your control documentation.
 
 ---
 
 ## Architecture
 
-SecurePipe uses the GitHub Actions `workflow_call` pattern. Your app repo contains one caller
-file. All scanner logic, tool versions, and step definitions live here. You update once and
-every connected repo picks it up.
-
 ```
-App repo (caller)                    SecurePipe (callee)
-─────────────────                    ──────────────────────────────────────
-.github/workflows/                   .github/workflows/
-  pipeline.yml        calls →          reusable-security-pipeline.yml
-  │
-  └── passes inputs:
-        app-language, image-name
-        app-port, fail-severity
-        aws-region, cloud-provider
-        registry-url, reporting-mode
-        defectdojo-url
+securepipe (bash CLI)
+│
+├── run_sast()      → docker run returntocorp/semgrep  → reports/raw/semgrep.json
+├── run_sca()       → docker run python:3.12-slim       → reports/raw/sca.json
+│                     (pip-audit, auto-detected)
+├── run_container() → docker run aquasec/trivy          → reports/raw/trivy.json
+│                     (builds image from Dockerfile first if present)
+└── run_dast()      → docker run ghcr.io/zaproxy/zaproxy → reports/raw/zap.json
+                      (skipped unless --url is provided)
+                            │
+                     scripts/generate-report.py
+                            │
+                     reports/security-report.html
 ```
 
-**Job execution order:**
+Each scanner runs in its own Docker container. No tool is installed on the host machine. Scan results are written to `reports/raw/` as JSON, then aggregated into a single HTML report.
 
-```
-[TruffleHog] ← secrets gate, blocks all other jobs if it fails
-      │
-      ├── [Bandit]       Python only
-      ├── [Semgrep]      all languages
-      ├── [pip-audit]    Python only
-      ├── [npm-audit]    Node.js only
-      ├── [Checkov]      all languages
-      └── [Build + SBOM] ─── [Trivy]
-                         └── [ZAP]
-                               │
-                         [DefectDojo import]  if defectdojo-url is set
-                               │
-                         [Pipeline summary]
-```
-
-Image sharing between jobs uses GitHub Actions artifacts. The image built in `build-and-sbom`
-is exported as a tar, uploaded with 1-day retention, and loaded by Trivy and ZAP in their
-own runners.
+Image sharing for the container scan: if a Dockerfile is found in the target directory, SecurePipe builds a local Docker image, passes it to Trivy, then removes it on `./securepipe clean`. If no Dockerfile is found, Trivy runs a filesystem scan instead.
 
 ---
 
-## Language support
+## Why not X?
 
-| | TruffleHog | Semgrep | Checkov | Bandit | pip-audit | npm-audit |
-|-|:---:|:---:|:---:|:---:|:---:|:---:|
-| Python | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| Node.js | ✓ | ✓ | ✓ | — | — | ✓ |
-| Java | ✓ | ✓ | ✓ | — | — | — |
+### GitHub Advanced Security
 
-Language-specific jobs are automatically skipped — no configuration needed.
+GHAS is excellent if you are already paying for GitHub Enterprise. It covers secrets, code scanning, and Dependabot. It does not do container scanning or DAST. It requires per-seat licensing on private repos. SecurePipe runs the same scanners free, locally, on any repository.
 
----
+### Snyk
 
-## Custom Semgrep rules
+Snyk has deeper SCA intelligence and a strong developer experience. It costs money at meaningful scale, requires an account, and phones home on every scan. SecurePipe is local-first — no account, no telemetry, no internet required after pulling Docker images.
 
-Add `.yml` rule files to `.semgrep/` and they run on every scan alongside the community packs.
-Three rules are included by default:
+### Manual toolchain
 
-| Rule | Catches |
-|------|---------|
-| `hardcoded-aws-access-key` | AWS Access Key IDs hardcoded in source |
-| `flask-debug-mode-enabled` | Flask `debug=True` in production |
-| `npm-unsafe-perm` | `--unsafe-perm` in npm scripts |
+Running each tool manually means different output formats, different CI configs, and no unified report. The setup cost is non-trivial, and it falls apart when team members change. SecurePipe is one command, one output, no maintenance.
 
 ---
 
@@ -309,46 +231,42 @@ Three rules are included by default:
 
 ```
 securepipe/
+├── securepipe                               # CLI entry point
+├── scripts/
+│   └── generate-report.py                  # aggregates raw JSON → HTML
 ├── .github/
-│   ├── workflows/
-│   │   └── reusable-security-pipeline.yml
-│   ├── ISSUE_TEMPLATE/
-│   │   ├── bug_report.yml
-│   │   └── feature_request.yml
-│   └── PULL_REQUEST_TEMPLATE.md
+│   └── workflows/
+│       └── reusable-security-pipeline.yml  # GitHub Actions reusable pipeline
 ├── sample-apps/
-│   └── python/                  minimal Flask app for end-to-end testing
-├── terraform/
-│   ├── main.tf                  OIDC provider, ECR repo, IAM role
-│   ├── variables.tf
-│   ├── outputs.tf
-│   └── README.md
+│   └── python/                             # vulnerable Flask app for demo scans
+├── terraform/                              # AWS OIDC + ECR provisioning
 ├── .semgrep/
-│   └── custom-rules.yml
+│   └── custom-rules.yml                    # org-specific rules
 ├── .zap/
-│   └── rules.tsv
+│   └── rules.tsv                           # ZAP passive rule overrides
 ├── docs/
-│   ├── onboarding.md            AWS setup, rollout sequence, troubleshooting
-│   └── defect-dojo-setup.md     DefectDojo on EC2, API token, import setup
-├── setup.sh                     generates caller workflow + prints required secrets
-├── Makefile                     make validate, make lint, make test
-├── USE_THIS_TEMPLATE.md         first 30 minutes after clicking Use this template
-├── CONTRIBUTING.md
-├── SECURITY.md
-└── LICENSE
+│   ├── onboarding.md                       # CI setup guide
+│   └── defect-dojo-setup.md                # DefectDojo deployment
+├── setup.sh                                # generates caller workflow for CI
+├── reports/                                # gitignored scan output
+└── Makefile
 ```
+
+---
+
+## Java support
+
+Java is supported in the GitHub Actions pipeline (Semgrep with Java rules, Checkov for IaC). OWASP Dependency Check for Java dependencies is on the roadmap. The local CLI scanner currently covers Python and Node.js SCA; Java SCA via the CLI is not included because `dependency-check` has significant startup overhead in Docker. If you need Java SCA in CI, the Actions pipeline handles it via Semgrep.
 
 ---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: validate YAML before every commit
-(`make validate`), test end to end against a real caller, one logical change per commit.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Validate YAML before committing (`make validate`). Test end to end against a real caller.
 
 ## Security
 
-Report vulnerabilities via [GitHub Security Advisories](https://github.com/ismailarici/securepipe/security/advisories/new).
-Do not open public issues for security findings. See [SECURITY.md](SECURITY.md) for the full policy.
+Report vulnerabilities via [GitHub Security Advisories](https://github.com/ismailarici/securepipe/security/advisories/new). See [SECURITY.md](SECURITY.md).
 
 ## License
 

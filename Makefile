@@ -1,4 +1,4 @@
-.PHONY: validate lint test setup help
+.PHONY: validate lint test setup scan help
 
 WORKFLOW := .github/workflows/reusable-security-pipeline.yml
 
@@ -19,3 +19,6 @@ test: validate lint
 
 setup:
 	@bash setup.sh
+
+scan:
+	./securepipe scan --target ./sample-apps/python
