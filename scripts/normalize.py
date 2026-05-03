@@ -499,7 +499,11 @@ def _enrich_with_imports(findings, import_map, dep_chains):
             f["used_in"] = direct[:6]
             continue
 
-        # 2. Transitive: find who pulls this package in
+        # 2. Transitive: only for packages NOT in requirements.txt
+        # (f["file"] being set means pip-audit found it as a declared dep)
+        if f.get("file"):
+            continue
+
         parent_name = child_to_parent.get(_pkg_key(pkg))
         if parent_name:
             parent_locs = _find_in_map(import_map, parent_name)
@@ -555,7 +559,9 @@ def load_findings(raw_dir):
                 pkg = _pkg_key(f.get("package") or "")
                 chain = dep_chains.get(pkg, "")
                 # Only show if it's a transitive dep (chain has more than one segment)
-                if chain and " → " in chain:
+                # Only show dep_chain for truly transitive packages
+                # (direct deps have f["file"] set from pip-audit)
+                if chain and " → " in chain and not f.get("file"):
                     f["dep_chain"] = chain
 
     if (raw_dir / "imports.json").exists():

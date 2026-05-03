@@ -117,7 +117,7 @@ def _used_in_html(f):
     else:
         used_block = (
             '<div style="font-size:12px;color:#9ca3af">'
-            'Indirect dependency — not directly imported in source</div>'
+            '(no direct usage found — may be transitive)</div>'
         )
 
     return declared + used_block
