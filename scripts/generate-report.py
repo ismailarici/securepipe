@@ -55,7 +55,12 @@ def _location(f):
     if cat == "CONTAINER":
         pkg = f.get("package", "")
         ver = f.get("version", "")
-        return e(f"{pkg}@{ver}" if ver else pkg)
+        target = f.get("container_target", "")
+        pkg_str = f"{pkg}@{ver}" if ver else pkg
+        if target:
+            return (f'{e(pkg_str)}<br>'
+                    f'<span style="font-size:11px;color:#9ca3af;font-family:monospace">{e(target)}</span>')
+        return e(pkg_str)
     if cat == "DAST":
         method = f.get("method", "")
         ep = f.get("endpoint", "")
@@ -295,7 +300,7 @@ def build_html(findings, generated_at):
           f'</div>'
           f'<table><thead><tr>'
           f'<th>Severity</th><th>Category</th><th>Tool</th>'
-          f'<th>Finding</th><th>Location</th><th>Fix Summary</th><th></th>'
+          f'<th>Finding</th><th>Package / Path</th><th>Fix Summary</th><th></th>'
           f'</tr></thead><tbody id="findings-tbody">'
           f'{rows_html}'
           f'</tbody></table></div>\n'
