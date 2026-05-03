@@ -403,14 +403,14 @@ def parse_zap(data):
 # ── Deduplication ─────────────────────────────────────────────────────────────
 
 def deduplicate(findings):
-    """Merge findings with the same CVE + package detected by multiple tools."""
+    """Merge findings with the same CVE + package (case-insensitive) across all tools/categories."""
     seen = {}
     result = []
     for f in findings:
         cve = f.get("cve")
         pkg = f.get("package")
         if cve and cve not in ("CVE-unknown", "") and pkg:
-            key = f"{cve}|{pkg}"
+            key = f"{cve.upper()}|{pkg.lower()}"  # case-insensitive on both
             if key in seen:
                 existing = seen[key]
                 sources = existing.get("sources", [existing["tool"]])
@@ -432,21 +432,80 @@ def deduplicate(findings):
     return result
 
 
+# ── Dependency chain builder ──────────────────────────────────────────────────
+
+def _build_dep_chains(dep_tree):
+    """
+    Returns {package_name_lower: chain_string} from pipdeptree --json-tree output.
+    e.g. {"urllib3": "requests → urllib3", "jinja2": "flask → Jinja2"}
+    Root packages map to just their own name.
+    """
+    chains = {}
+
+    def _walk(node, parent_chain):
+        name = (node.get("package_name") or "").lower()
+        if not name:
+            return
+        my_chain = f"{parent_chain} → {node.get('package_name', name)}" if parent_chain else node.get("package_name", name)
+        if name not in chains:
+            chains[name] = my_chain
+        for dep in node.get("dependencies", []):
+            _walk(dep, my_chain)
+
+    for root in (dep_tree if isinstance(dep_tree, list) else []):
+        _walk(root, "")
+    return chains
+
+
 # ── Import enrichment ─────────────────────────────────────────────────────────
 
-def _enrich_with_imports(findings, import_map):
-    """Add used_in locations to SCA findings by matching package name to import map."""
+def _pkg_key(name):
+    """Normalise a package name for lookup: lowercase + replace - with _."""
+    return (name or "").lower().replace("-", "_")
+
+
+def _find_in_map(import_map, pkg_name):
+    """Case/separator-insensitive lookup in import_map."""
+    key = _pkg_key(pkg_name)
+    return (import_map.get(key)
+            or import_map.get(key.replace("_", "-"))
+            or import_map.get(pkg_name.lower())
+            or [])
+
+
+def _enrich_with_imports(findings, import_map, dep_chains):
+    """
+    Add used_in / via_package to SCA findings.
+    - Direct import found  → used_in = [file:line, ...]
+    - Transitive via parent that IS imported → via_package + parent's used_in
+    - Otherwise → no used_in (leave blank)
+    """
+    # Build reverse dep map: child → parent_name (first parent found)
+    # dep_chains values are like "Flask → Jinja2"; we want child→direct_parent
+    child_to_parent = {}
+    for child, chain in dep_chains.items():
+        parts = [p.strip() for p in chain.split("→")]
+        if len(parts) >= 2:
+            child_to_parent[child] = parts[-2]  # immediate parent
+
     for f in findings:
         if f.get("category") != "SCA":
             continue
-        pkg = (f.get("package") or "").lower().replace("-", "_")
-        # Try exact match, then hyphen/underscore variants
-        used_in = (import_map.get(pkg)
-                   or import_map.get(pkg.replace("_", "-"))
-                   or import_map.get(f.get("package", "").lower())
-                   or [])
-        if used_in:
-            f["used_in"] = used_in[:6]
+        pkg = f.get("package") or ""
+
+        # 1. Direct import
+        direct = _find_in_map(import_map, pkg)
+        if direct:
+            f["used_in"] = direct[:6]
+            continue
+
+        # 2. Transitive: find who pulls this package in
+        parent_name = child_to_parent.get(_pkg_key(pkg))
+        if parent_name:
+            parent_locs = _find_in_map(import_map, parent_name)
+            f["via_package"] = parent_name
+            if parent_locs:
+                f["via_used_in"] = parent_locs[:4]
 
 
 # ── Impact enrichment ─────────────────────────────────────────────────────────
@@ -487,8 +546,20 @@ def load_findings(raw_dir):
 
     findings = deduplicate(findings)
 
+    dep_chains = {}
+    if (raw_dir / "dep-tree.json").exists():
+        dep_chains = _build_dep_chains(_load_json(raw_dir / "dep-tree.json"))
+        # Attach dep_chain string to findings that are transitive deps
+        for f in findings:
+            if f.get("category") in ("SCA", "CONTAINER"):
+                pkg = _pkg_key(f.get("package") or "")
+                chain = dep_chains.get(pkg, "")
+                # Only show if it's a transitive dep (chain has more than one segment)
+                if chain and " → " in chain:
+                    f["dep_chain"] = chain
+
     if (raw_dir / "imports.json").exists():
-        _enrich_with_imports(findings, _load_json(raw_dir / "imports.json"))
+        _enrich_with_imports(findings, _load_json(raw_dir / "imports.json"), dep_chains)
 
     _enrich_with_impact(findings)
 

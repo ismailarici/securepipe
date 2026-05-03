@@ -69,13 +69,58 @@ def _location(f):
     return ""
 
 
-def _tool_label(f):
+def _detected_by(f):
+    """Tool cell — bullets when multiple tools found the same issue."""
     sources = f.get("sources")
     if sources and len(sources) > 1:
-        # Show each source on its own line for clarity
         bullets = "".join(f'<div style="font-size:11px">&#8226; {e(s)}</div>' for s in sources)
-        return f'<div style="line-height:1.6">{bullets}</div>'
+        return f'<div style="line-height:1.7">{bullets}</div>'
     return e(f.get("tool", ""))
+
+
+def _used_in_html(f):
+    """Build the Used in / Declared in block for SCA findings in the detail panel."""
+    file_ref  = f.get("file", "")
+    used_in   = f.get("used_in", [])       # direct import locations
+    via_pkg   = f.get("via_package", "")   # parent package for transitive deps
+    via_locs  = f.get("via_used_in", [])   # where the parent is imported
+
+    declared = (f'<div style="margin-bottom:6px">'
+                f'<span style="color:#6b7280;font-size:11px">Declared in</span> '
+                f'<code>{e(file_ref)}</code></div>') if file_ref else ""
+
+    if used_in:
+        lines = "".join(
+            f'<div style="font-size:12px;font-family:monospace;padding-left:8px">'
+            f'&#8226; {e(u["file"])}:{u["line"]}</div>'
+            for u in used_in
+        )
+        used_block = f'<div style="color:#6b7280;font-size:11px">Used in</div>{lines}'
+    elif via_pkg:
+        # Transitive dep — show via-parent + parent's import locations
+        if via_locs:
+            parent_lines = "".join(
+                f'<div style="font-size:12px;font-family:monospace;padding-left:8px">'
+                f'&#8226; {e(u["file"])}:{u["line"]}</div>'
+                for u in via_locs
+            )
+            used_block = (
+                f'<div style="color:#6b7280;font-size:11px">Used transitively via '
+                f'<strong>{e(via_pkg)}</strong></div>'
+                f'{parent_lines}'
+            )
+        else:
+            used_block = (
+                f'<div style="font-size:12px;color:#6b7280">'
+                f'Transitive dependency — loaded at runtime by <strong>{e(via_pkg)}</strong></div>'
+            )
+    else:
+        used_block = (
+            '<div style="font-size:12px;color:#9ca3af">'
+            'Indirect dependency — not directly imported in source</div>'
+        )
+
+    return declared + used_block
 
 
 def _detail_panel(f):
@@ -112,31 +157,18 @@ def _detail_panel(f):
             parts.append(f'<div class="dl"><div class="dt">Fix version</div>'
                          f'<div class="dd"><code style="color:#16a34a;font-weight:600">{e(fixed)}</code></div></div>')
 
-        # Declared in + Used in (SCA only)
+        # Declared in + Used in (direct or transitive)
         if cat == "SCA":
-            file_ref = f.get("file", "")
-            used_in = f.get("used_in", [])
-            if file_ref or used_in:
-                declared = f'<div style="margin-bottom:4px"><span style="color:#6b7280;font-size:11px">Declared in</span> <code>{e(file_ref)}</code></div>' if file_ref else ""
-                if used_in:
-                    usage_lines = "".join(
-                        f'<div style="font-size:12px;font-family:monospace;padding-left:8px">'
-                        f'&#8226; {e(u["file"])}:{u["line"]}</div>'
-                        for u in used_in
-                    )
-                    used_block = (f'<div style="color:#6b7280;font-size:11px;margin-top:6px">Used in</div>'
-                                  f'{usage_lines}')
-                else:
-                    used_block = '<div style="font-size:12px;color:#9ca3af;margin-top:4px">No direct import found in source (may be a transitive dependency)</div>'
-                parts.append(f'<div class="dl"><div class="dt">Location</div>'
-                             f'<div class="dd">{declared}{used_block}</div></div>')
+            parts.append(f'<div class="dl"><div class="dt">Used in</div>'
+                         f'<div class="dd">{_used_in_html(f)}</div></div>')
 
-        # Dependency chain (npm-audit via[])
-        dep_path = f.get("dependency_path", [])
-        if dep_path:
-            chain = e(" → ".join(dep_path))
+        # Dependency chain (pip from pipdeptree, npm from via[])
+        dep_chain = f.get("dep_chain", "")
+        dep_path  = f.get("dependency_path", [])
+        chain_str = dep_chain or (" → ".join(dep_path) if dep_path else "")
+        if chain_str:
             parts.append(f'<div class="dl"><div class="dt">Dep chain</div>'
-                         f'<div class="dd"><code>{chain}</code></div></div>')
+                         f'<div class="dd"><code>{e(chain_str)}</code></div></div>')
 
         # Container target
         if cat == "CONTAINER":
@@ -173,9 +205,7 @@ def _detail_panel(f):
     fix = f.get("fix", "")
     cve_title = f.get("cve_title", "")
     if fix:
-        why_html = ""
-        if cve_title:
-            why_html = f'<div class="why-text">Why: {e(cve_title)}</div>'
+        why_html = f'<div class="why-text">Why: {e(cve_title)}</div>' if cve_title else ""
         parts.append(f'<div class="dl"><div class="dt">Fix</div>'
                      f'<div class="dd fix-text">{e(fix)}{why_html}</div></div>')
 
@@ -189,7 +219,7 @@ def _detail_panel(f):
         parts.append(f'<div class="dl"><div class="dt">CVE / ID</div>'
                      f'<div class="dd"><code>{e(cve)}</code></div></div>')
 
-    # Found by (dedup) — shown prominently
+    # Found by — prominent for deduped findings
     sources = f.get("sources", [])
     if sources and len(sources) > 1:
         bullets = "".join(f'<div>&#8226; {e(s)}</div>' for s in sources)
@@ -281,23 +311,26 @@ def build_html(findings, generated_at):
             f.get("endpoint", ""), (f.get("description", "") or "")[:100],
             f.get("cve", ""),
         ])).lower())
+        title_cell = (
+            f'<div style="font-size:13px;font-weight:500;margin-bottom:3px">{e(f.get("title",""))}</div>'
+            f'{_cat_badge(f["category"])}'
+        )
         rows_html += (
             f'<tr class="finding-row" data-sev="{e(f["severity"])}" '
             f'data-cat="{e(f["category"])}" data-tool="{e(f["tool"])}" data-text="{search_text}">'
             f'<td>{_sev_badge(f["severity"])}</td>'
-            f'<td>{_cat_badge(f["category"])}</td>'
-            f'<td style="font-size:12px;color:#374151">{_tool_label(f)}</td>'
-            f'<td style="font-size:13px;font-weight:500">{e(f.get("title",""))}</td>'
+            f'<td>{title_cell}</td>'
             f'<td style="font-size:12px;color:#6b7280;font-family:monospace">{loc}</td>'
             f'<td style="font-size:12px;color:#374151">{fix_short}</td>'
+            f'<td style="font-size:12px;color:#374151">{_detected_by(f)}</td>'
             f'<td class="expand-arrow" style="text-align:center;font-size:16px;'
             f'color:#9ca3af;user-select:none;width:28px">&#8250;</td></tr>\n'
-            f'<tr class="detail-row" style="display:none"><td colspan="7">'
+            f'<tr class="detail-row" style="display:none"><td colspan="6">'
             f'<div class="detail-panel">{_detail_panel(f)}</div></td></tr>\n'
         )
 
     if not findings:
-        rows_html = '<tr><td colspan="7" class="empty-msg">No findings detected.</td></tr>'
+        rows_html = '<tr><td colspan="6" class="empty-msg">No findings detected.</td></tr>'
 
     reco_rows = ""
     if critical:
@@ -335,8 +368,8 @@ def build_html(findings, generated_at):
           f'<span id="visible-count">{len(findings)} finding{"s" if len(findings) != 1 else ""}</span>'
           f'</div>'
           f'<table><thead><tr>'
-          f'<th>Severity</th><th>Category</th><th>Tool</th>'
-          f'<th>Finding</th><th>Package / Path</th><th>Fix Summary</th><th></th>'
+          f'<th>Severity</th><th>Finding</th>'
+          f'<th>Package / Path</th><th>Fix Summary</th><th>Detected by</th><th></th>'
           f'</tr></thead><tbody id="findings-tbody">'
           f'{rows_html}'
           f'</tbody></table></div>\n'

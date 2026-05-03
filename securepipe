@@ -88,15 +88,18 @@ run_sca() {
   mkdir -p "$RAW_DIR"
 
   if [ "$lang" = "python" ]; then
-    log "Running pip-audit ..."
+    log "Running pip-audit + dependency tree ..."
     docker run --rm \
       -v "$TARGET:/app" \
       --workdir /app \
       python:3.12-slim bash -c "
-        pip install pip-audit --quiet 2>/dev/null
+        pip install pip-audit pipdeptree --quiet 2>/dev/null
+        pip install -r requirements.txt --quiet 2>/dev/null || true
         pip-audit -r requirements.txt --format json -o /app/pip-audit.json 2>/dev/null || true
+        pipdeptree --json-tree 2>/dev/null > /app/dep-tree.json || echo '[]' > /app/dep-tree.json
         cat /app/pip-audit.json 2>/dev/null || echo '{\"dependencies\":[]}'
       " > "$RAW_DIR/sca.json" 2>/dev/null || echo '{"dependencies":[]}' > "$RAW_DIR/sca.json"
+    [ -f "$TARGET/dep-tree.json" ] && mv "$TARGET/dep-tree.json" "$RAW_DIR/dep-tree.json" || true
     local count
     count=$(python3 -c "
 import json
