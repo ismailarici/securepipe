@@ -17,12 +17,17 @@ def load_json(path):
         return {}
 
 
+_SEMGREP_SEV = {"ERROR": "HIGH", "WARNING": "MEDIUM", "INFO": "INFO"}
+
+
 def parse_semgrep(data):
     findings = []
     for r in data.get("results", []):
+        raw_sev = r.get("extra", {}).get("severity", "INFO").upper()
+        severity = _SEMGREP_SEV.get(raw_sev, raw_sev)
         findings.append({
             "tool": "Semgrep",
-            "severity": r.get("extra", {}).get("severity", "INFO").upper(),
+            "severity": severity,
             "title": r.get("check_id", "unknown"),
             "file": r.get("path", ""),
             "line": r.get("start", {}).get("line", ""),
