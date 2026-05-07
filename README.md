@@ -292,6 +292,29 @@ All reports are self-contained HTML — no external dependencies to open them. A
 
 ---
 
+## SecureOps integration
+
+SecurePipe is one component of a three-part modular security platform:
+
+| Component | Role |
+|-----------|------|
+| **SecurePipe** ← you are here | Application security — SAST, SCA, DAST, CI/CD scanning |
+| [**SecureInfra**](https://github.com/ismailarici/secureinfra) | Infrastructure security — AWS cloud posture, Prowler normalization |
+| [**SecureOps**](https://github.com/ismailarici/secureops) | SIEM/XDR layer — ingests both, routes to Wazuh, alerts, produces audit evidence |
+
+The raw JSON files SecurePipe writes to `reports/raw/` are consumed directly by SecureOps. After a scan, point SecureOps at that directory to normalize findings into the shared event schema and route them to Wazuh and DefectDojo:
+
+```bash
+# In your SecureOps project:
+python3 -m normalizer.main \
+  --input /path/to/your-app/reports/raw \
+  --config config/config.yaml
+```
+
+In CI, the reusable SecureOps pipeline handles this automatically — it downloads the SecurePipe artifact and runs the full normalization and routing pipeline. See the [SecureOps repo](https://github.com/ismailarici/secureops) for setup instructions.
+
+---
+
 ## Architecture
 
 ```
